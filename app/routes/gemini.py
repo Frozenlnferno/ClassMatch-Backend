@@ -1,11 +1,12 @@
 from flask import Blueprint, jsonify, request
 import json
+import os
 
 bp = Blueprint("gemini", __name__)
 
 from google import genai
 
-client = genai.Client(api_key="AIzaSyD4YlvN3H7BeAjdYYXfvPMcl_13Ou-TXwo")
+client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
 @bp.route("/")
 def index():
