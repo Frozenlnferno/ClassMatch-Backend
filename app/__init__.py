@@ -1,6 +1,9 @@
 from flask import Flask
 from .extensions import cors, get_supabase_client
 from .config import Config
+from dotenv import load_dotenv
+
+load_dotenv()
 
 def create_app():
     app = Flask(__name__)

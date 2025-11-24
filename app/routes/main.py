@@ -1,8 +1,10 @@
-from flask import Blueprint, jsonify, request
+from flask import Blueprint
 
 bp = Blueprint("main", __name__)
 
 @bp.route("/")
 def index():
-    return "Server is running."
-
+    return {
+        "status": "ok",
+        "message": "Server is running!"
+    }
