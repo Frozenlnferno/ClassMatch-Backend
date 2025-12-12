@@ -1,4 +1,6 @@
 from flask import Flask
+
+from .routes.schedules import controller as schedule_controller
 from .extensions import cors, get_supabase_client
 from .config import Config
 from dotenv import load_dotenv
@@ -15,7 +17,7 @@ def create_app():
     # Initialize extensions
     cors.init_app(
         app, 
-        origins=["http://localhost:5173", app.config["FRONTEND_ORIGIN"]], 
+        origins=[Config.FRONTEND_ORIGIN, app.config["FRONTEND_ORIGIN"]], 
         supports_credentials=True,
         methods=["GET","POST","OPTIONS","PUT","DELETE"],
         allow_headers=["Authorization", "Content-Type"]
@@ -24,9 +26,9 @@ def create_app():
     app.supabase = get_supabase_client()
 
     # Register blueprints
-    from .routes import main, schedule
+    from .routes import main
     app.register_blueprint(main.bp) # No url_prefix means it's the root
-    app.register_blueprint(schedule.bp, url_prefix="/api/schedule/")
+    app.register_blueprint(schedule_controller.bp, url_prefix="/api/schedule/")
 
     # Import models
     from . import models
