@@ -1,7 +1,7 @@
 from flask import Flask
 
 from .routes.schedules import controller as schedule_controller
-from .extensions import cors, get_supabase_client
+from .extensions import cors, init_db_pool
 from .config import Config
 from dotenv import load_dotenv
 
@@ -22,8 +22,9 @@ def create_app():
         methods=["GET","POST","OPTIONS","PUT","DELETE"],
         allow_headers=["Authorization", "Content-Type"]
     )
-
-    app.supabase = get_supabase_client()
+    
+    # Initialize database pool
+    init_db_pool()
 
     # Register blueprints
     from .routes import main

@@ -1,10 +1,19 @@
 from flask_cors import CORS
 from supabase import create_client
-import os
+import psycopg2
+from psycopg2 import pool
+from .config import Config
 
 cors = CORS()
 
-def get_supabase_client():
-    SUPABASE_URL = os.getenv("SUPABASE_URL")
-    SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
-    return create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+db_pool = None
+
+def init_db_pool():
+    global db_pool
+    db_pool = pool.SimpleConnectionPool(
+        minconn=1,
+        maxconn=10,
+        dsn=Config.DATABASE_URL,
+        sslmode="require"
+    )
+    return db_pool

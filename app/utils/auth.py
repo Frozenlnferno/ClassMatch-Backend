@@ -1,13 +1,11 @@
-import os
+from ..config import Config
 from flask import request, jsonify
 from functools import wraps
 import jwt
 from jwt import PyJWKClient
 
-PROJECT_ID = os.getenv("SUPABASE_PROJECT_ID")
-SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-JWT_SECRET = os.getenv("SUPABASE_JWT_SECRET")
+PROJECT_ID = Config.SUPABASE_PROJECT_ID
+JWT_SECRET = Config.SUPABASE_JWT_SECRET
 
 JWKS_URL = f"https://{PROJECT_ID}.supabase.co/auth/v1/.well-known/jwks.json"
 
@@ -34,7 +32,8 @@ def verify_supabase_jwt(token: str):
                 token,
                 key=public_key,
                 algorithms=["ES256"],
-                options={"verify_aud": False}
+                options={"verify_aud": False},
+                leeway=5
             )
             print(f"[AUTH] ES256 Token decoded successfully. User: {decoded.get('sub')}")
             return decoded

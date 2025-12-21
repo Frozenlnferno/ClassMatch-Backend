@@ -1,6 +1,6 @@
 import re
 
-COURSE_REGEX = re.compile(
+COURSE_REGEX = re.compile( 
     r"(.+?)\s+"                    # title (group 1)
     r"([A-Z]{2,4})\s*"             # subject (group 2)
     r"(\d{3})\s+"                  # number (group 3)
@@ -12,8 +12,17 @@ COURSE_REGEX = re.compile(
     r"(\d{2}/\d{2}/\d{4})"         # end date (group 8)  
 )
 
-def parse_course_headers(text):
-    matches = COURSE_REGEX.findall(text)
+TERM_REGEX = re.compile(
+    r"(Fall|Winter|Spring|Summer)\s+"       # Term (group 1)    
+    r"(\d{4})"                              # Year (group 2)
+)
+
+def parse_schedule_pdf(text):
+    course_matches = COURSE_REGEX.findall(text)
+    term_match = TERM_REGEX.search(text)
+
+    term = term_match.group(1).lower()
+    year = int(term_match.group(2))
 
     return [
         {
@@ -26,5 +35,8 @@ def parse_course_headers(text):
             "Start Date": m[6],
             "End Date": m[7]
         }
-        for m in matches
-    ]
+        for m in course_matches
+    ], {
+        "term": term,
+        "year": year
+    }
