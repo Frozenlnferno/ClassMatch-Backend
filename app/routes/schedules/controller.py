@@ -1,16 +1,15 @@
 from flask import request, jsonify
 from . import bp
 from app.utils.auth import require_auth
-from .service import extract_courses_from_pdf, upload_schedule_to_db
+from .service import extract_courses_from_pdf, add_courses_by_pdf, get_user_schedule
 from app.utils.db import db_conn
 
 @bp.route("/", methods=["GET"])
 @require_auth
-def index():
-    with db_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT * FROM users;")
-            return cur.fetchall()
+def get_schedule():
+    user_id = request.user["sub"]
+    courses = get_user_schedule(user_id, 2025, "fall")
+    return jsonify(courses)
 
 @bp.route("/upload", methods=["POST"])
 @require_auth
@@ -23,7 +22,7 @@ def upload_schedule():
 
     try:
         courses, schedule_info = extract_courses_from_pdf(pdf)
-        upload_schedule_to_db(user_id, schedule_info["year"], schedule_info["term"], courses)
+        add_courses_by_pdf(user_id, schedule_info["year"], schedule_info["term"], courses)
         
         return jsonify({
             "user_id": user_id,
