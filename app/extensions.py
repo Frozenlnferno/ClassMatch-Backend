@@ -14,5 +14,4 @@ def init_db_pool():
         dsn=Config.DATABASE_URL,
         sslmode="require"
     )
-    print("JUST MADE:", db_pool)
     return db_pool

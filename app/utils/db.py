@@ -4,7 +4,6 @@ from app import extensions
 # Use "with get_cursor() as cur:" to write/read to postgres
 @contextmanager
 def get_cursor():
-    print("db_pool:", extensions.db_pool)
     conn = extensions.db_pool.getconn() # Finds avaliable slot to init connection
     try:
         cur = conn.cursor() # Create cursor instance

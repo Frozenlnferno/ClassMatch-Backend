@@ -1,7 +1,8 @@
-from flask import request, jsonify, g
-from . import bp
+from flask import request, jsonify, g, Blueprint
 from app.utils.auth import require_auth
 from .service import extract_courses_from_pdf, add_courses_by_pdf, get_user_schedule
+
+bp = Blueprint("schedule", __name__)
 
 @bp.route("/", methods=["GET"])
 @require_auth
