@@ -1,20 +1,35 @@
-from flask import request, jsonify
+from flask import request, jsonify, g
 from . import bp
 from app.utils.auth import require_auth
 from .service import extract_courses_from_pdf, add_courses_by_pdf, get_user_schedule
-from app.utils.db import db_conn
 
 @bp.route("/", methods=["GET"])
 @require_auth
 def get_schedule():
-    user_id = request.user["sub"]
-    courses = get_user_schedule(user_id, 2025, "fall")
+    user_id = g.user["sub"]
+    term = request.args.get("term")
+    year = request.args.get("year")
+    
+    if not term or term not in {"fall", "winter", "spring", "summer"}:
+        return jsonify({"error": "Invalid term"}), 400
+    
+    if not year:
+        return jsonify({"error": "Invalid year"}), 400
+    
+    try: 
+        year = int(year)
+        if year < 2000 or year > 2100:
+            raise ValueError
+    except ValueError:
+        return jsonify({"error": "Invalid year"}), 400
+
+    courses = get_user_schedule(user_id, year, term)
     return jsonify(courses)
 
 @bp.route("/upload", methods=["POST"])
 @require_auth
 def upload_schedule():
-    user_id = request.user["sub"]
+    user_id = g.user["sub"]
     pdf = request.files.get("pdf")
 
     if not pdf:

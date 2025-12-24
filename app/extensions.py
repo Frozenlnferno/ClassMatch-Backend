@@ -1,6 +1,4 @@
 from flask_cors import CORS
-from supabase import create_client
-import psycopg2
 from psycopg2 import pool
 from .config import Config
 
@@ -16,4 +14,5 @@ def init_db_pool():
         dsn=Config.DATABASE_URL,
         sslmode="require"
     )
+    print("JUST MADE:", db_pool)
     return db_pool

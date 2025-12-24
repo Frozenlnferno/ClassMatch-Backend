@@ -1,6 +1,5 @@
 from PyPDF2 import PdfReader
 from .parser import parse_schedule_pdf
-from app.extensions import db_pool
 from app.utils.db import get_cursor
 
 def extract_courses_from_pdf(file):
@@ -75,4 +74,4 @@ def get_user_schedule(uid, year, term):
             (uid, year, term)
         )
         courses = cur.fetchall()
-    return courses
+    return courses or []

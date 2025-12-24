@@ -1,5 +1,5 @@
 from ..config import Config
-from flask import request, jsonify
+from flask import request, jsonify, g
 from functools import wraps
 import jwt
 from jwt import PyJWKClient
@@ -53,6 +53,7 @@ def require_auth(f):
     def wrapper(*args, **kwargs):
         auth_header = request.headers.get("Authorization", "")
         parts = auth_header.split(" ")
+        
         if len(parts) != 2 or parts[0] != "Bearer":
             print(f"[AUTH] Invalid auth header format")
             return jsonify({"error": "Missing or invalid Authorization header"}), 401
@@ -62,9 +63,9 @@ def require_auth(f):
             user_claims = verify_supabase_jwt(token)
         except Exception as e:
             print(f"[AUTH] Auth failed: {e}")
-            return jsonify({"error": "Unauthorized", "details": str(e)}), 401
+            return jsonify({"error": "Unauthorized"}), 401
 
-        request.user = user_claims
+        g.user = user_claims
         return f(*args, **kwargs)
 
     return wrapper

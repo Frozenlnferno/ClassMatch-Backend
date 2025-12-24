@@ -1,7 +1,7 @@
 from flask import Flask
 
 from .routes.schedules import controller as schedule_controller
-from .extensions import cors, init_db_pool
+from .extensions import cors, init_db_pool, db_pool
 from .config import Config
 from dotenv import load_dotenv
 
