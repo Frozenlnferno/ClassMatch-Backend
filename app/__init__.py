@@ -1,7 +1,9 @@
 from flask import Flask
 
 from .routes.schedules import controller as schedule_controller
-from .extensions import cors, init_db_pool, db_pool
+from .routes.groups import controller as group_controller
+
+from .extensions import cors, init_db_pool
 from .config import Config
 from dotenv import load_dotenv
 
@@ -30,6 +32,7 @@ def create_app():
     from .routes import main
     app.register_blueprint(main.bp) # No url_prefix means it's the root
     app.register_blueprint(schedule_controller.bp, url_prefix="/api/schedule")
+    app.register_blueprint(group_controller.bp, url_prefix="/api/groups")
 
     # Import models
     from . import models
