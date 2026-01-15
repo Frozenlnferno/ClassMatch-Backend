@@ -21,22 +21,32 @@ def parse_schedule_pdf(text):
     course_matches = COURSE_REGEX.findall(text)
     term_match = TERM_REGEX.search(text)
 
-    term = term_match.group(1).lower()
-    year = int(term_match.group(2))
+    if not term_match:
+        raise ValueError("Could not find term and year information in the PDF. Please ensure your schedule PDF contains the term (Fall/Winter/Spring/Summer) and year.")
+
+    if not course_matches:
+        raise ValueError("No course information found in the PDF. Please ensure your schedule PDF contains course details.")
+
+    try:
+        term = term_match.group(1).lower()
+        year = int(term_match.group(2))
+    except (IndexError, ValueError) as e:
+        raise ValueError(f"Invalid term/year format in PDF: {e}")
 
     return [
         {
-            "Title": m[0],
-            "Subject": m[1],
-            "Subject Number": m[2],
-            "Section": m[3],
-            "Credit Hours": m[4],
-            "CRN": m[5],
-            "Start Date": m[6],
-            "End Date": m[7]
+            "Title": m[0].strip(),
+            "Subject": m[1].strip(),
+            "Subject Number": m[2].strip(),
+            "Section": m[3].strip(),
+            "Credit Hours": m[4].strip(),
+            "CRN": m[5].strip(),
+            "Start Date": m[6].strip(),
+            "End Date": m[7].strip()
         }
         for m in course_matches
     ], {
         "term": term,
         "year": year
     }
+

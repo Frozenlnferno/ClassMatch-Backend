@@ -10,7 +10,8 @@ def get_cursor():
         yield cur
         conn.commit() # Commits Postgres write (won't do anything on reads)
     except Exception:
-        conn.rollback() # Undo any writes if error
+        if conn and not conn.closed:
+            conn.rollback() # Undo any writes if error
         raise
     finally:
         cur.close() 

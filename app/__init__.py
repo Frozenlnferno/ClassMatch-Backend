@@ -31,7 +31,7 @@ def create_app():
     # Register blueprints
     from .routes import main
     app.register_blueprint(main.bp) # No url_prefix means it's the root
-    app.register_blueprint(schedule_controller.bp, url_prefix="/api/schedule")
+    app.register_blueprint(schedule_controller.bp, url_prefix="/api/schedules")
     app.register_blueprint(group_controller.bp, url_prefix="/api/groups")
 
     # Import models
