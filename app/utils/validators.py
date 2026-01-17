@@ -8,6 +8,10 @@ def validate_year_term():
         tuple: (year_int, term_str, error_response, error_code)
         - On success: (year, term, None, None)
         - On error: (None, None, jsonify_error, status_code)
+    e.g. 
+        year, term, error_response, error_code = validate_year_term()
+        if error_response:
+            return error_response, error_code
     """
     term = request.args.get("term")
     year = request.args.get("year")

@@ -1,7 +1,8 @@
 from flask import Flask
 
-from .routes.schedules import controller as schedule_controller
-from .routes.groups import controller as group_controller
+from .routes.schedules import controller as schedules_controller
+from .routes.groups import controller as groups_controller
+from .routes.users import controller as users_controller
 
 from .extensions import cors, init_db_pool
 from .config import Config
@@ -31,8 +32,9 @@ def create_app():
     # Register blueprints
     from .routes import main
     app.register_blueprint(main.bp) # No url_prefix means it's the root
-    app.register_blueprint(schedule_controller.bp, url_prefix="/api/schedules")
-    app.register_blueprint(group_controller.bp, url_prefix="/api/groups")
+    app.register_blueprint(schedules_controller.bp, url_prefix="/api/schedules")
+    app.register_blueprint(groups_controller.bp, url_prefix="/api/groups")
+    app.register_blueprint(users_controller.bp, url_prefix="/api/users")
 
     # Import models
     from . import models
