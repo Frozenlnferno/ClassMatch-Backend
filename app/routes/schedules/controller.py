@@ -74,7 +74,8 @@ def delete_schedule():
 @require_auth
 def delete_schedule_courses():
     user_id = g.user["sub"]
-    crns = request.json.get("crns") or []
+    data = request.get_json(silent=True) or {}
+    crns = data["crns"] if "crns" in data else []
     year, term, error_response, error_code = validate_year_term()
     
     if error_response:

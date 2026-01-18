@@ -22,13 +22,14 @@ def create_group_route():
     user_id = g.user["sub"]
     try:
         # accept joinable flag from client (default True)
-        joinable = request.json.get("joinable")
+        data = request.get_json(silent=True) or {}
+        joinable = data["joinable"] if "joinable" in data else None
         if joinable is None:
             joinable = True
         create_group(
             user_id,
-            request.json.get("groupName"),
-            request.json.get("description"),
+            data["groupName"] if "groupName" in data else None,
+            data["description"] if "description" in data else None,
             joinable,
         )
     except Exception as e:
@@ -55,7 +56,8 @@ def join_group_route():
 def leave_group_route():
     # Remove user from a group
     user_id = g.user["sub"]
-    group_id = request.json.get("group_id")
+    data = request.get_json(silent=True) or {}
+    group_id = data["group_id"] if "group_id" in data else None
 
     try:
         leave_group(user_id, group_id)
@@ -68,8 +70,9 @@ def leave_group_route():
 def change_joinable_route():
     # Change a group's joinable status (admin/owner only)
     admin_id = g.user["sub"]
-    group_id = request.json.get("group_id")
-    new_status = request.json.get("joinable")
+    data = request.get_json(silent=True) or {}
+    group_id = data["group_id"] if "group_id" in data else None
+    new_status = data["joinable"] if "joinable" in data else None
 
     try:
         change_group_joinable(admin_id, group_id, new_status)
@@ -93,7 +96,8 @@ def kick_member_route(group_id):
     # Remove a member from group (admin/owner only)
     # group_id comes from the URL path
     admin_id = g.user["sub"]
-    member_id = request.json.get("member_id")
+    data = request.get_json(silent=True) or {}
+    member_id = data["member_id"] if "member_id" in data else None
 
     try:
         kick_member(admin_id, member_id, group_id)
@@ -108,8 +112,9 @@ def kick_member_route(group_id):
 def change_role_route(group_id):
     # Change a member's role (admin/owner only)
     admin_id = g.user["sub"]
-    member_id = request.json.get("member_id")
-    new_role = request.json.get("new_role")
+    data = request.get_json(silent=True) or {}
+    member_id = data["member_id"] if "member_id" in data else None
+    new_role = data["new_role"] if "new_role" in data else None
 
     try:
         change_group_role(admin_id, member_id, group_id, new_role)

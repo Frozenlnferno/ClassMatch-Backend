@@ -82,8 +82,8 @@ def leave_group(uid, group_id):
     return True
 
 def change_group_joinable(admin_uid, group_id, joinable):
-    if not admin_uid or not group_id:
-        raise ValueError("Invalid input: admin_uid and group_id are required")
+    if not admin_uid or not group_id or not joinable:
+        raise ValueError("Invalid input: admin_uid, group_id, and joinable are required")
 
     with get_cursor() as cur:
         # Check if admin_uid is an admin of the group
