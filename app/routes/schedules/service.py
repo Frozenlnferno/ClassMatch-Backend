@@ -124,6 +124,27 @@ def get_user_schedule(uid, year, term):
         courses = cur.fetchall()
     return courses or []
 
+def get_all_schedules(uid):
+    with get_cursor() as cur:
+        cur.execute(
+            """
+                SELECT
+                    s.term,
+                    s.year,
+                    COUNT(sc.class_id) AS class_count
+                FROM schedules s
+                LEFT JOIN schedule_classes sc
+                    ON sc.schedule_id = s.id
+                WHERE s.user_id = %s
+                GROUP BY s.id, s.year, s.term
+                ORDER BY s.year DESC, s.term DESC;
+            """,
+            (uid,)
+        )
+        schedules = cur.fetchall()
+        print(schedules)
+    return schedules or []
+
 def get_matching_classmates(uid, year, term, group_id):
     with get_cursor() as cur:
         cur.execute(

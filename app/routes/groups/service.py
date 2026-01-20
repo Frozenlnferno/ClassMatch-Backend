@@ -81,9 +81,35 @@ def leave_group(uid, group_id):
         )
     return True
 
-def change_group_joinable(admin_uid, group_id, joinable):
-    if not admin_uid or not group_id or not joinable:
-        raise ValueError("Invalid input: admin_uid, group_id, and joinable are required")
+def change_group_info(admin_uid, group_id, name, description, joinable):
+    if not admin_uid or not group_id:
+        raise ValueError("Invalid input: admin_uid and group_id are required")
+
+    fields = []
+    values = []
+
+    if name is not None:
+        fields.append("name = %s")
+        values.append(name)
+    
+    if description is not None:
+        fields.append("description = %s")
+        values.append(description)
+
+    if joinable is not None and joinable == True or joinable == False:
+        fields.append("joinable = %s")
+        values.append(joinable)
+
+    if not fields:
+        return 0  # nothing to update
+    
+    values.append(group_id)
+
+    query = f"""
+        UPDATE groups
+        SET {', '.join(fields)}
+        WHERE id = %s
+    """
 
     with get_cursor() as cur:
         # Check if admin_uid is an admin of the group
@@ -98,15 +124,8 @@ def change_group_joinable(admin_uid, group_id, joinable):
         if not admin_data or (admin_data[0] != 'admin' and admin_data[0] != 'owner'):
             raise PermissionError("User does not have permission to change group settings")
 
-        # Update group's joinable status
-        cur.execute(
-            """
-                UPDATE groups
-                SET joinable = %s
-                WHERE id = %s;
-            """,
-            (joinable, group_id)
-        )
+        # Update group's info
+        cur.execute(query, values)
     return True
 
 def kick_member(admin_uid, member_uid, group_id):

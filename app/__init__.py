@@ -22,7 +22,7 @@ def create_app():
         app, 
         origins=[Config.FRONTEND_ORIGIN, app.config["FRONTEND_ORIGIN"]], 
         supports_credentials=True,
-        methods=["GET","POST","OPTIONS","PUT","DELETE"],
+        methods=["GET","POST","OPTIONS","PUT","DELETE","PATCH"],
         allow_headers=["Authorization", "Content-Type"]
     )
     

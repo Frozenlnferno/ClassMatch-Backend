@@ -1,6 +1,6 @@
 from flask import request, jsonify, g, Blueprint
 from app.utils.auth import require_auth
-from .service import create_group, join_group, get_user_groups, leave_group, kick_member, get_group_members, change_group_role, change_group_joinable
+from .service import create_group, join_group, get_user_groups, leave_group, kick_member, get_group_members, change_group_role, change_group_info
 
 bp = Blueprint("groups", __name__)
 
@@ -65,20 +65,22 @@ def leave_group_route():
         return jsonify({"error": str(e)}), 400
     return jsonify({"status": "Left group successfully"}), 200
 
-@bp.route("/change-joinable", methods=["POST"])
+@bp.route("/<group_id>", methods=["PATCH"])
 @require_auth
-def change_joinable_route():
+def update_group_info(group_id):
     # Change a group's joinable status (admin/owner only)
     admin_id = g.user["sub"]
     data = request.get_json(silent=True) or {}
-    group_id = data["group_id"] if "group_id" in data else None
-    new_status = data["joinable"] if "joinable" in data else None
+
+    name = data["name"] if "name" in data else None
+    description = data["description"] if "description" in data else None
+    joinable = data["joinable"] if "joinable" in data else None
 
     try:
-        change_group_joinable(admin_id, group_id, new_status)
+        change_group_info(admin_id, group_id, name, description, joinable)
     except Exception as e:
         return jsonify({"error": str(e)}), 400
-    return jsonify({"status": "Joinable status changed successfully"}), 200
+    return jsonify({"status": "Group info changed successfully"}), 200
 
 @bp.route("/<group_id>/members", methods=["GET"])
 @require_auth

@@ -1,9 +1,9 @@
 from flask import request, jsonify, g, Blueprint
 from app.utils.auth import require_auth
-from .service import extract_courses_from_pdf, add_courses_by_pdf, get_user_schedule, get_matching_classmates, remove_schedule, remove_courses_from_schedule
+from .service import extract_courses_from_pdf, add_courses_by_pdf, get_user_schedule, get_matching_classmates, remove_schedule, remove_courses_from_schedule, get_all_schedules
 from app.utils.validators import validate_year_term
 
-bp = Blueprint("schedule", __name__)
+bp = Blueprint("schedules", __name__)
 
 @bp.route("/", methods=["GET"])
 @require_auth
@@ -20,6 +20,18 @@ def get_schedule_route():
     except Exception as e:
         print(f"Error getting user schedule: {e}")
         return jsonify({"error": "Failed to retrieve schedule"}), 500
+
+@bp.route("/list", methods=["GET"])
+@require_auth
+def get_all_schedules_route():
+    user_id = g.user["sub"]
+    print(user_id)
+    try:
+        courses = get_all_schedules(user_id)
+        return jsonify(courses)
+    except Exception as e:
+        print(f"Error getting all user schedules: {e}")
+        return jsonify({"error": "Failed to retrieve all user schedules"}), 500
 
 @bp.route("/", methods=["POST"])
 @require_auth
