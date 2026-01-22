@@ -64,8 +64,8 @@ def join_group(uid, join_code):
         )
         result = cur.fetchone()
         if not result:
-            return False # User is already member
-    return True
+            return -1 # User is already member
+    return group_id
 
 def leave_group(uid, group_id):
     if not uid or not group_id:
@@ -74,11 +74,75 @@ def leave_group(uid, group_id):
     with get_cursor() as cur:
         cur.execute(
             """
+                SELECT role FROM group_members
+                WHERE group_id = %s AND user_id = %s;
+            """,
+            (group_id, uid)
+        )
+        role = cur.fetchone()
+        if not role:
+            raise ValueError("User is not a member of the group")
+        
+        # Remove user from group
+        cur.execute( 
+            """
                 DELETE FROM group_members
                 WHERE group_id = %s AND user_id = %s;
             """,
             (group_id, uid)
         )
+
+        if role[0] == 'owner':
+            # Upon leaving, transfer ownership to oldest joining admin and if none, oldest member
+            cur.execute(
+                """
+                    SELECT user_id FROM group_members
+                    WHERE group_id = %s AND role = 'admin'
+                    ORDER BY joined_at ASC
+                    LIMIT 1;
+                """,
+                (group_id,)
+            )
+            admin_user_id = cur.fetchone()
+            if admin_user_id:
+                cur.execute(
+                    """
+                        UPDATE group_members
+                        SET role = 'owner'
+                        WHERE group_id = %s AND user_id = %s;
+                    """,
+                    (group_id, admin_user_id[0])
+                )
+            else:
+                # Find oldest member to transfer ownership
+                cur.execute(
+                    """
+                        SELECT user_id FROM group_members
+                        WHERE group_id = %s AND role = 'member'
+                        ORDER BY joined_at ASC
+                        LIMIT 1;
+                    """,
+                    (group_id,)
+                )
+                oldest_member = cur.fetchone()
+                if oldest_member:
+                    cur.execute(
+                        """
+                            UPDATE group_members
+                            SET role = 'owner'
+                            WHERE group_id = %s AND user_id = %s;
+                        """,
+                        (group_id, oldest_member[0])
+                    )
+                else:
+                    # No other members, delete group
+                    cur.execute(
+                        """
+                            DELETE FROM groups
+                            WHERE id = %s;
+                        """,
+                        (group_id,)
+                    )
     return True
 
 def change_group_info(admin_uid, group_id, name, description, joinable):

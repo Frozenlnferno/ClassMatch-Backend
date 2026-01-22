@@ -125,3 +125,20 @@ def change_role_route(group_id):
     except Exception as e:
         return jsonify({"error": str(e)}), 400
     return jsonify({"status": "Role changed successfully"}), 200
+
+@bp.route("/join/<join_code>", methods=["POST"])
+@require_auth
+def join_group_by_url_route(join_code):
+    # Join a group using a join code
+    user_id = g.user["sub"]
+
+    try:
+        group_id = join_group(user_id, join_code)
+        if group_id == -1:
+            return jsonify({"status": "User is already a member"}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+    return jsonify({
+        "status": "Group joined successfully",
+        "group_id": group_id
+        }), 200

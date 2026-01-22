@@ -1,9 +1,6 @@
 import os
 
 class Config:
-    SUPABASE_URL = os.getenv("SUPABASE_URL")
-    SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
-    SUPABASE_PROJECT_ID = os.getenv("SUPABASE_PROJECT_ID")
-    SUPABASE_JWT_SECRET = os.getenv("SUPABASE_JWT_SECRET")
     FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN")
     DATABASE_URL = os.getenv("DATABASE_URL")
+    DB_SSLMODE = os.getenv("DB_SSLMODE", "require")  # prod default

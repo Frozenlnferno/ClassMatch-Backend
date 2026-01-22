@@ -12,6 +12,6 @@ def init_db_pool():
         minconn=1,
         maxconn=10,
         dsn=Config.DATABASE_URL,
-        sslmode="require"
+        sslmode=Config.DB_SSLMODE
     )
     return db_pool
