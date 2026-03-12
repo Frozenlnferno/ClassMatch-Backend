@@ -1,12 +1,159 @@
+import xml.etree.ElementTree as ET
+
+import requests
 from PyPDF2 import PdfReader
-from .parser import parse_schedule_pdf
+
 from app.utils.db import get_cursor
 
-def extract_courses_from_pdf(file):
+from .parser import parse_schedule_pdf
+
+UIUC_EXPLORER_URL = "https://courses.illinois.edu/cisapp/explorer/schedule/{year}/{term}/{subject}/{course}/{crn}.xml"
+UIUC_API_TIMEOUT_SECONDS = 10
+
+
+def _normalize_text(value):
+    return " ".join(value.split()) if value else ""
+
+
+def _local_name(tag_name):
+    return tag_name.split("}", 1)[-1]
+
+
+def _iter_named_elements(root, names):
+    for element in root.iter():
+        if _local_name(element.tag) in names:
+            yield element
+
+
+def _find_first_text(root, names):
+    for element in _iter_named_elements(root, names):
+        text = _normalize_text("".join(element.itertext()))
+        if text:
+            return text
+    return ""
+
+
+def _find_first_attribute(root, element_names, attribute_names):
+    for element in _iter_named_elements(root, element_names):
+        for attribute_name in attribute_names:
+            value = _normalize_text(element.attrib.get(attribute_name, ""))
+            if value:
+                return value
+    return ""
+
+
+def _find_all_text(root, names):
+    values = []
+    for element in _iter_named_elements(root, names):
+        text = _normalize_text("".join(element.itertext()))
+        if text:
+            values.append(text)
+    return values
+
+
+def _extract_subject_code(root):
+    subject_code = _find_first_text(root, {"subjectCode", "subject"})
+    if subject_code.isupper() and 2 <= len(subject_code) <= 5:
+        return subject_code
+
+    subject_code = _find_first_attribute(root, {"subject"}, {"id", "code"})
+    return subject_code.upper()
+
+
+def _extract_course_number(root):
+    course_number = _find_first_text(root, {"courseNumber", "number"})
+    if course_number:
+        return course_number
+
+    return _find_first_attribute(root, {"course"}, {"id", "number"})
+
+
+def _extract_course_title(root):
+    title = _find_first_text(root, {"courseTitle", "title", "label"})
+    if title:
+        return title
+
+    for element in _iter_named_elements(root, {"course"}):
+        title = _normalize_text("".join(element.itertext()))
+        if title:
+            return title
+
+        title = _normalize_text(element.attrib.get("label", ""))
+        if title:
+            return title
+
+    return ""
+
+
+def _extract_section(root):
+    section = _find_first_text(root, {"sectionNumber", "sectionId"})
+    if section:
+        return section
+
+    section = _find_first_attribute(root, {"section", "detailedSection"}, {"id", "sectionNumber"})
+    if section:
+        return section
+
+    return ""
+
+
+def _extract_crn(root):
+    crn = _find_first_text(root, {"referenceNumber", "crn"})
+    if crn:
+        return crn
+
+    return _find_first_attribute(root, {"section", "detailedSection"}, {"id"})
+
+
+def _extract_credit_hours(root):
+    return _find_first_text(root, {"creditHours", "hours"})
+
+
+def _extract_course_type(root):
+    return _find_first_text(root, {"sectionType", "type", "typeCode"})
+
+
+def _extract_instructors(root):
+    instructors = _find_all_text(root, {"instructor", "name"})
+    unique_instructors = []
+    for instructor in instructors:
+        if instructor not in unique_instructors:
+            unique_instructors.append(instructor)
+    return ", ".join(unique_instructors)
+
+
+def _extract_building(root):
+    return _find_first_text(root, {"buildingName", "building"})
+
+
+def _extract_room_number(root):
+    return _find_first_text(root, {"roomNumber", "room"})
+
+
+def _extract_meeting_time(root, tag_names):
+    raw_value = _find_first_text(root, tag_names)
+    if not raw_value:
+        return None
+
+    for time_format in ("%H:%M", "%H:%M:%S"):
+        try:
+            import datetime
+            return datetime.datetime.strptime(raw_value, time_format).time()
+        except ValueError:
+            continue
+
+    return None
+
+
+def _extract_days_of_week(root):
+    return _find_first_text(root, {"daysOfWeek", "days"})
+
+
+def extract_schedule_identifiers_from_pdf(file):
     try:
         reader = PdfReader(file)
-    except Exception as e:
-        raise ValueError(f"Failed to read PDF file: {str(e)}. Please ensure the file is a valid PDF.")
+    except Exception as exc:
+        raise ValueError(f"Failed to read PDF file: {str(exc)}. Please ensure the file is a valid PDF.") from exc
 
     if len(reader.pages) == 0:
         raise ValueError("PDF file appears to be empty or corrupted.")
@@ -17,20 +164,96 @@ def extract_courses_from_pdf(file):
             extracted = page.extract_text()
             if extracted:
                 text += extracted + "\n"
-        except Exception as e:
-            print(f"Warning: Failed to extract text from page: {e}")
+        except Exception as exc:
+            print(f"Warning: Failed to extract text from page: {exc}")
             continue
 
     if not text.strip():
         raise ValueError("No readable text found in PDF. The PDF may be image-based or corrupted.")
 
-    courses, schedule_info = parse_schedule_pdf(text)
+    return parse_schedule_pdf(text)
 
-    return courses, schedule_info
+
+def _fetch_uiuc_course(year, term, identifier):
+    subject = identifier["Subject"]
+    course_number = identifier["Subject Number"]
+    crn = identifier["CRN"]
+    url = UIUC_EXPLORER_URL.format(
+        year=year,
+        term=term,
+        subject=subject,
+        course=course_number,
+        crn=crn,
+    )
+
+    try:
+        response = requests.get(url, timeout=UIUC_API_TIMEOUT_SECONDS)
+    except requests.RequestException as exc:
+        raise ValueError(
+            f"Failed to reach the UIUC course API for {subject} {course_number} CRN {crn}: {exc}"
+        ) from exc
+
+    if response.status_code == 404:
+        raise ValueError(
+            f"UIUC course not found for {subject} {course_number} CRN {crn} in {term} {year}."
+        )
+
+    if response.status_code != 200:
+        raise ValueError(
+            f"UIUC course API request failed for {subject} {course_number} CRN {crn} with status {response.status_code}."
+        )
+
+    try:
+        root = ET.fromstring(response.content)
+    except ET.ParseError as exc:
+        raise ValueError(
+            f"UIUC course API returned malformed XML for {subject} {course_number} CRN {crn}."
+        ) from exc
+
+    title = _extract_course_title(root)
+    section = _extract_section(root)
+    api_subject = _extract_subject_code(root) or subject
+    api_course_number = _extract_course_number(root) or course_number
+    api_crn = _extract_crn(root) or crn
+
+    if not title:
+        raise ValueError(
+            f"UIUC course API response was missing the course title for {subject} {course_number} CRN {crn}."
+        )
+
+    if not section:
+        raise ValueError(
+            f"UIUC course API response was missing the section for {subject} {course_number} CRN {crn}."
+        )
+
+    if api_subject.upper() != subject.upper() or api_course_number != course_number or api_crn != crn:
+        raise ValueError(
+            f"UIUC course API returned mismatched data for {subject} {course_number} CRN {crn}."
+        )
+
+    return {
+        "Title": title,
+        "Subject": api_subject.upper(),
+        "Subject Number": api_course_number,
+        "Section": section,
+        "CRN": api_crn,
+        "Credit Hours": _extract_credit_hours(root) or None,
+        "Course Type": _extract_course_type(root) or None,
+        "Instructor": _extract_instructors(root) or None,
+        "Building": _extract_building(root) or None,
+        "Room Number": _extract_room_number(root) or None,
+        "Start Time": _extract_meeting_time(root, {"startTime"}) ,
+        "End Time": _extract_meeting_time(root, {"endTime"}),
+        "Days of Week": _extract_days_of_week(root) or None,
+    }
+
+
+def resolve_courses_from_uiuc(year, term, course_identifiers):
+    return [_fetch_uiuc_course(year, term, identifier) for identifier in course_identifiers]
+
 
 def add_courses_by_pdf(uid, year, term, courses):
     with get_cursor() as cur:
-        # Insert the schedule and get the ID
         cur.execute(
             """
                 INSERT INTO schedules (user_id, year, term)
@@ -42,41 +265,89 @@ def add_courses_by_pdf(uid, year, term, courses):
         )
         schedule_id = cur.fetchone()[0]
 
-        # Delete existing schedule-class relationships for this schedule
         cur.execute(
             """
-                DELETE FROM schedule_classes
+                DELETE FROM schedule_sections
                 WHERE schedule_id = %s
             """,
             (schedule_id,)
         )
 
-        # Insert each course
         for course in courses:
-            # Insert the course, handling duplicates gracefully
             cur.execute(
                 """
-                    INSERT INTO classes (year, term, title, subject, number, section, crn)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (year, term, crn) DO UPDATE SET title=EXCLUDED.title
+                    INSERT INTO classes (subject, number, title)
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT (subject, number) DO UPDATE
+                    SET title = EXCLUDED.title
                     RETURNING id
                 """,
-                (year, term, course["Title"], course["Subject"], course["Subject Number"], course["Section"], course["CRN"])
+                (
+                    course["Subject"],
+                    course["Subject Number"],
+                    course["Title"],
+                )
             )
             class_id = cur.fetchone()[0]
-            
-            # Link the schedule to the class
+
             cur.execute(
                 """
-                    INSERT INTO schedule_classes (schedule_id, class_id)
+                    INSERT INTO sections (
+                        class_id,
+                        year,
+                        term,
+                        section,
+                        crn,
+                        course_type,
+                        instructor,
+                        building,
+                        room_number,
+                        start_time,
+                        end_time,
+                        days_of_week
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (year, term, crn) DO UPDATE
+                    SET class_id = EXCLUDED.class_id,
+                        section = EXCLUDED.section,
+                        course_type = EXCLUDED.course_type,
+                        instructor = EXCLUDED.instructor,
+                        building = EXCLUDED.building,
+                        room_number = EXCLUDED.room_number,
+                        start_time = EXCLUDED.start_time,
+                        end_time = EXCLUDED.end_time,
+                        days_of_week = EXCLUDED.days_of_week
+                    RETURNING id
+                """,
+                (
+                    class_id,
+                    year,
+                    term,
+                    course["Section"],
+                    course["CRN"],
+                    course["Course Type"],
+                    course["Instructor"],
+                    course["Building"],
+                    course["Room Number"],
+                    course["Start Time"],
+                    course["End Time"],
+                    course["Days of Week"],
+                )
+            )
+            section_id = cur.fetchone()[0]
+
+            cur.execute(
+                """
+                    INSERT INTO schedule_sections (schedule_id, section_id)
                     VALUES (%s, %s)
                 """,
-                (schedule_id, class_id)
+                (schedule_id, section_id)
             )
 
-# MIGHT NOT IMPLEMENT
+
 def add_courses_by_crn(uid, year, term, crn):
     pass
+
 
 def remove_schedule(uid, year, term):
     with get_cursor() as cur:
@@ -90,39 +361,62 @@ def remove_schedule(uid, year, term):
             (uid, year, term)
         )
 
+
 def remove_courses_from_schedule(uid, year, term, crns):
     with get_cursor() as cur:
         cur.execute(
             """
-                DELETE FROM schedule_classes sc
+                DELETE FROM schedule_sections ss
                 USING schedules s
-                WHERE sc.schedule_id = s.id
+                WHERE ss.schedule_id = s.id
                     AND s.user_id = %s
                     AND s.year = %s
                     AND s.term = %s
-                    AND sc.class_id IN (
-                        SELECT id FROM classes WHERE crn = ANY(%s)
+                    AND ss.section_id IN (
+                        SELECT id FROM sections WHERE year = %s AND term = %s AND crn = ANY(%s)
                     )
             """,
-            (uid, year, term, crns)
+            (uid, year, term, year, term, crns)
         )
+
 
 def get_user_schedule(uid, year, term):
     with get_cursor() as cur:
         cur.execute(
             """
-                SELECT c.*
+                SELECT
+                    c.id,
+                    c.subject,
+                    c.number,
+                    c.title,
+                    c.created_at,
+                    sec.id AS section_id,
+                    sec.year,
+                    sec.term,
+                    sec.section,
+                    sec.crn,
+                    sec.course_type,
+                    sec.instructor,
+                    sec.building,
+                    sec.room_number,
+                    sec.start_time,
+                    sec.end_time,
+                    sec.days_of_week,
+                    sec.created_at AS section_created_at
                 FROM schedules s
-                JOIN schedule_classes sc ON sc.schedule_id = s.id
-                JOIN classes c ON c.id = sc.class_id
+                JOIN schedule_sections ss ON ss.schedule_id = s.id
+                JOIN sections sec ON sec.id = ss.section_id
+                JOIN classes c ON c.id = sec.class_id
                 WHERE s.user_id = %s
                     AND s.year = %s
-                    AND s.term = %s;
+                    AND s.term = %s
+                ORDER BY c.subject, c.number, sec.section;
             """,
             (uid, year, term)
         )
         courses = cur.fetchall()
     return courses or []
+
 
 def get_all_schedules(uid):
     with get_cursor() as cur:
@@ -131,10 +425,10 @@ def get_all_schedules(uid):
                 SELECT
                     s.term,
                     s.year,
-                    COUNT(sc.class_id) AS class_count
+                    COUNT(ss.section_id) AS class_count
                 FROM schedules s
-                LEFT JOIN schedule_classes sc
-                    ON sc.schedule_id = s.id
+                LEFT JOIN schedule_sections ss
+                    ON ss.schedule_id = s.id
                 WHERE s.user_id = %s
                 GROUP BY s.id, s.year, s.term
                 ORDER BY s.year DESC, s.term DESC;
@@ -144,6 +438,7 @@ def get_all_schedules(uid):
         schedules = cur.fetchall()
         print(schedules)
     return schedules or []
+
 
 def get_matching_classmates(uid, year, term, group_id):
     with get_cursor() as cur:
@@ -157,10 +452,10 @@ def get_matching_classmates(uid, year, term, group_id):
                     AND s.term = %s
                   LIMIT 1
                 ),
-                my_classes AS (
-                  SELECT sc.class_id
-                  FROM schedule_classes sc
-                  JOIN me ON me.my_schedule_id = sc.schedule_id
+                my_sections AS (
+                  SELECT ss.section_id
+                  FROM schedule_sections ss
+                  JOIN me ON me.my_schedule_id = ss.schedule_id
                 ),
                 group_users AS (
                   SELECT gm.user_id
@@ -175,21 +470,20 @@ def get_matching_classmates(uid, year, term, group_id):
                     AND s.term = %s
                 )
                 SELECT
-                  mc.class_id,
+                  ms.section_id,
                   u.id   AS member_id,
                   u.name AS member_name
-                FROM my_classes mc
-                JOIN schedule_classes sc
-                  ON sc.class_id = mc.class_id
+                FROM my_sections ms
+                JOIN schedule_sections ss
+                  ON ss.section_id = ms.section_id
                 JOIN group_schedules gs
-                  ON gs.schedule_id = sc.schedule_id
+                  ON gs.schedule_id = ss.schedule_id
                 JOIN users u
                   ON u.id = gs.user_id
                 WHERE u.id <> %s
-                ORDER BY mc.class_id, u.name;
+                ORDER BY ms.section_id, u.name;
             """,
             (uid, year, term, group_id, year, term, uid)
         )
         matches = cur.fetchall()
     return matches or []
-

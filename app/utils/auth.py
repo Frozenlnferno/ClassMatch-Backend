@@ -3,9 +3,9 @@ from functools import wraps
 import jwt
 from jwt import InvalidTokenError
 from jwt import PyJWKClient
+from app.config import Config
 
-SUPABASE_JWKS_URL = "http://127.0.0.1:54321/auth/v1/.well-known/jwks.json"
-jwks_client = PyJWKClient(SUPABASE_JWKS_URL)
+jwks_client = PyJWKClient(Config.JWKS_URL)
 
 def verify_supabase_jwt(token: str):
     signing_key = jwks_client.get_signing_key_from_jwt(token).key

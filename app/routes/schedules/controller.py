@@ -1,6 +1,15 @@
 from flask import request, jsonify, g, Blueprint
 from app.utils.auth import require_auth
-from .service import extract_courses_from_pdf, add_courses_by_pdf, get_user_schedule, get_matching_classmates, remove_schedule, remove_courses_from_schedule, get_all_schedules
+from .service import (
+    extract_schedule_identifiers_from_pdf,
+    resolve_courses_from_uiuc,
+    add_courses_by_pdf,
+    get_user_schedule,
+    get_matching_classmates,
+    remove_schedule,
+    remove_courses_from_schedule,
+    get_all_schedules,
+)
 from app.utils.validators import validate_year_term
 
 bp = Blueprint("schedules", __name__)
@@ -47,7 +56,8 @@ def create_schedule():
         return jsonify({"error": "File must be a PDF"}), 400
 
     try:
-        courses, schedule_info = extract_courses_from_pdf(pdf)
+        course_identifiers, schedule_info = extract_schedule_identifiers_from_pdf(pdf)
+        courses = resolve_courses_from_uiuc(schedule_info["year"], schedule_info["term"], course_identifiers)
         add_courses_by_pdf(user_id, schedule_info["year"], schedule_info["term"], courses)
         
         return jsonify({
@@ -58,9 +68,8 @@ def create_schedule():
         })
 
     except ValueError as e:
-        # PDF parsing errors (empty PDF, invalid format, etc.)
-        print(f"PDF parsing error: {e}")
-        return jsonify({"error": f"Failed to parse PDF: {str(e)}"}), 400
+        print(f"Schedule upload validation error: {e}")
+        return jsonify({"error": str(e)}), 400
     except Exception as e:
         # Database errors, unexpected exceptions
         print(f"Unexpected error uploading schedule: {e}")

@@ -15,6 +15,7 @@ def get_groups_route():
         return jsonify({"error": str(e)}), 400
     return jsonify(groups), 200
 
+
 @bp.route("/create", methods=["POST"])
 @require_auth
 def create_group_route():
@@ -36,6 +37,7 @@ def create_group_route():
         return jsonify({"error": str(e)}), 400
     return jsonify({"status": "Group created successfully"}), 201
 
+
 @bp.route("/join", methods=["GET"])
 @require_auth
 def join_group_route():
@@ -51,6 +53,7 @@ def join_group_route():
         return jsonify({"error": str(e)}), 400
     return jsonify({"status": "Group joined successfully"}), 200
 
+
 @bp.route("/leave", methods=["POST"])
 @require_auth
 def leave_group_route():
@@ -64,6 +67,7 @@ def leave_group_route():
     except Exception as e:
         return jsonify({"error": str(e)}), 400
     return jsonify({"status": "Left group successfully"}), 200
+
 
 @bp.route("/<group_id>", methods=["PATCH"])
 @require_auth
@@ -82,6 +86,7 @@ def update_group_info(group_id):
         return jsonify({"error": str(e)}), 400
     return jsonify({"status": "Group info changed successfully"}), 200
 
+
 @bp.route("/<group_id>/members", methods=["GET"])
 @require_auth
 def get_members_route(group_id):
@@ -91,6 +96,7 @@ def get_members_route(group_id):
     except Exception as e:
         return jsonify({"error": str(e)}), 400
     return jsonify(members), 200
+
 
 @bp.route("/<group_id>/kick", methods=["POST"])
 @require_auth
@@ -109,6 +115,7 @@ def kick_member_route(group_id):
         return jsonify({"error": str(e)}), 400
     return jsonify({"status": "Member kicked successfully"}), 200
 
+
 @bp.route("/<group_id>/change-role", methods=["POST"])
 @require_auth
 def change_role_route(group_id):
@@ -125,6 +132,7 @@ def change_role_route(group_id):
     except Exception as e:
         return jsonify({"error": str(e)}), 400
     return jsonify({"status": "Role changed successfully"}), 200
+
 
 @bp.route("/join/<join_code>", methods=["POST"])
 @require_auth
