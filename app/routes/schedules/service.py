@@ -105,10 +105,6 @@ def _extract_crn(root):
     return _find_first_attribute(root, {"section", "detailedSection"}, {"id"})
 
 
-def _extract_credit_hours(root):
-    return _find_first_text(root, {"creditHours", "hours"})
-
-
 def _extract_course_type(root):
     return _find_first_text(root, {"sectionType", "type", "typeCode"})
 
@@ -237,7 +233,6 @@ def _fetch_uiuc_course(year, term, identifier):
         "Subject Number": api_course_number,
         "Section": section,
         "CRN": api_crn,
-        "Credit Hours": _extract_credit_hours(root) or None,
         "Course Type": _extract_course_type(root) or None,
         "Instructor": _extract_instructors(root) or None,
         "Building": _extract_building(root) or None,
