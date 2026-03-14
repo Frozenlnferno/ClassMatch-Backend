@@ -4,6 +4,7 @@ from .service import (
     extract_schedule_identifiers_from_pdf,
     resolve_courses_from_uiuc,
     add_courses_by_pdf,
+    add_courses_by_crn,
     get_user_schedule,
     get_matching_classmates,
     remove_schedule,
@@ -74,6 +75,68 @@ def create_schedule():
         # Database errors, unexpected exceptions
         print(f"Unexpected error uploading schedule: {e}")
         return jsonify({"error": "Failed to upload schedule. Please try again."}), 500
+
+@bp.route("/courses", methods=["POST"])
+@require_auth
+def add_schedule_courses():
+    user_id = g.user["sub"]
+    data = request.get_json(silent=True) or {}
+    year, term, error_response, error_code = validate_year_term()
+
+    if error_response:
+        return error_response, error_code
+
+    raw_courses = data.get("courses", [])
+    if not isinstance(raw_courses, list):
+        return jsonify({"error": "Invalid courses payload"}), 400
+
+    normalized_identifiers = []
+    seen = set()
+    for raw_course in raw_courses:
+        if not isinstance(raw_course, dict):
+            return jsonify({"error": "Invalid courses payload"}), 400
+
+        raw_subject = raw_course.get("subject") or raw_course.get("course_subject")
+        raw_number = raw_course.get("course") or raw_course.get("course_number") or raw_course.get("number")
+        raw_crn = raw_course.get("crn")
+
+        if not isinstance(raw_subject, str) or not isinstance(raw_number, (str, int)) or not isinstance(raw_crn, (str, int)):
+            return jsonify({"error": "Each course must include subject, course, and crn"}), 400
+
+        subject = raw_subject.strip().upper()
+        course_number = str(raw_number).strip()
+        crn = str(raw_crn).strip()
+
+        if not subject or not course_number or len(crn) != 5 or not crn.isdigit():
+            return jsonify({"error": "Each course must include valid subject, course, and 5-digit crn"}), 400
+
+        identifier = {
+            "Subject": subject,
+            "Subject Number": course_number,
+            "CRN": crn,
+        }
+        dedupe_key = (subject, course_number, crn)
+        if dedupe_key not in seen:
+            seen.add(dedupe_key)
+            normalized_identifiers.append(identifier)
+
+    if not normalized_identifiers:
+        return jsonify({"error": "No courses were provided"}), 400
+
+    try:
+        courses = add_courses_by_crn(user_id, year, term, normalized_identifiers)
+        return jsonify({
+            "message": "Courses added successfully",
+            "courses": courses,
+            "term": term,
+            "year": year,
+        })
+    except ValueError as e:
+        print(f"Course add validation error: {e}")
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        print(f"Error adding courses: {e}")
+        return jsonify({"error": "Failed to add courses"}), 500
 
 @bp.route("/", methods=["DELETE"])
 @require_auth

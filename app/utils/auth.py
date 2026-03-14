@@ -1,14 +1,28 @@
-from flask import request, jsonify, g
 from functools import wraps
+
 import jwt
-from jwt import InvalidTokenError
+from flask import g, jsonify, request
 from jwt import PyJWKClient
+from jwt.exceptions import InvalidTokenError, PyJWKClientError
+
 from app.config import Config
 
-jwks_client = PyJWKClient(Config.JWKS_URL)
+jwks_client = None
+
+
+def _get_jwks_client():
+    global jwks_client
+    if jwks_client is None:
+        if not Config.JWKS_URL:
+            raise InvalidTokenError("JWT verification is not configured")
+        jwks_client = PyJWKClient(Config.JWKS_URL)
+    return jwks_client
 
 def verify_supabase_jwt(token: str):
-    signing_key = jwks_client.get_signing_key_from_jwt(token).key
+    try:
+        signing_key = _get_jwks_client().get_signing_key_from_jwt(token).key
+    except PyJWKClientError as exc:
+        raise InvalidTokenError("Unable to resolve signing key for token") from exc
 
     decoded = jwt.decode(
         token,
@@ -30,7 +44,8 @@ def require_auth(f):
         token = auth_header.split(" ", 1)[1]
         try:
             claims = verify_supabase_jwt(token)
-        except InvalidTokenError:
+        except InvalidTokenError as exc:
+            print(f"Auth verification failed: {exc}")
             return jsonify({"error": "Unauthorized"}), 401
 
         g.user = claims

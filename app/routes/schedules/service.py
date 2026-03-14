@@ -340,8 +340,97 @@ def add_courses_by_pdf(uid, year, term, courses):
             )
 
 
-def add_courses_by_crn(uid, year, term, crn):
-    pass
+def add_courses_by_crn(uid, year, term, course_identifiers):
+    if not course_identifiers:
+        raise ValueError("No courses were provided.")
+
+    courses = resolve_courses_from_uiuc(year, term, course_identifiers)
+
+    with get_cursor() as cur:
+        cur.execute(
+            """
+                INSERT INTO schedules (user_id, year, term)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (user_id, term, year) DO UPDATE SET year=EXCLUDED.year
+                RETURNING id
+            """,
+            (uid, year, term)
+        )
+        schedule_id = cur.fetchone()[0]
+
+        for course in courses:
+            cur.execute(
+                """
+                    INSERT INTO classes (subject, number, title)
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT (subject, number) DO UPDATE
+                    SET title = EXCLUDED.title
+                    RETURNING id
+                """,
+                (
+                    course["Subject"],
+                    course["Subject Number"],
+                    course["Title"],
+                )
+            )
+            class_id = cur.fetchone()[0]
+
+            cur.execute(
+                """
+                    INSERT INTO sections (
+                        class_id,
+                        year,
+                        term,
+                        section,
+                        crn,
+                        course_type,
+                        instructor,
+                        building,
+                        room_number,
+                        start_time,
+                        end_time,
+                        days_of_week
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (year, term, crn) DO UPDATE
+                    SET class_id = EXCLUDED.class_id,
+                        section = EXCLUDED.section,
+                        course_type = EXCLUDED.course_type,
+                        instructor = EXCLUDED.instructor,
+                        building = EXCLUDED.building,
+                        room_number = EXCLUDED.room_number,
+                        start_time = EXCLUDED.start_time,
+                        end_time = EXCLUDED.end_time,
+                        days_of_week = EXCLUDED.days_of_week
+                    RETURNING id
+                """,
+                (
+                    class_id,
+                    year,
+                    term,
+                    course["Section"],
+                    course["CRN"],
+                    course["Course Type"],
+                    course["Instructor"],
+                    course["Building"],
+                    course["Room Number"],
+                    course["Start Time"],
+                    course["End Time"],
+                    course["Days of Week"],
+                )
+            )
+            section_id = cur.fetchone()[0]
+
+            cur.execute(
+                """
+                    INSERT INTO schedule_sections (schedule_id, section_id)
+                    VALUES (%s, %s)
+                    ON CONFLICT (schedule_id, section_id) DO NOTHING
+                """,
+                (schedule_id, section_id)
+            )
+
+    return courses
 
 
 def remove_schedule(uid, year, term):
@@ -409,8 +498,31 @@ def get_user_schedule(uid, year, term):
             """,
             (uid, year, term)
         )
-        courses = cur.fetchall()
-    return courses or []
+        rows = cur.fetchall() or []
+
+    return [
+        {
+            "id": row[0],
+            "subject": row[1],
+            "number": row[2],
+            "title": row[3],
+            "created_at": row[4],
+            "section_id": row[5],
+            "year": row[6],
+            "term": row[7],
+            "section": row[8],
+            "crn": row[9],
+            "course_type": row[10],
+            "instructor": row[11],
+            "building": row[12],
+            "room_number": row[13],
+            "start_time": row[14],
+            "end_time": row[15],
+            "days_of_week": row[16],
+            "section_created_at": row[17],
+        }
+        for row in rows
+    ]
 
 
 def get_all_schedules(uid):
@@ -430,9 +542,16 @@ def get_all_schedules(uid):
             """,
             (uid,)
         )
-        schedules = cur.fetchall()
-        print(schedules)
-    return schedules or []
+        rows = cur.fetchall() or []
+
+    return [
+        {
+            "term": row[0],
+            "year": row[1],
+            "class_count": row[2],
+        }
+        for row in rows
+    ]
 
 
 def get_matching_classmates(uid, year, term, group_id):
@@ -480,5 +599,13 @@ def get_matching_classmates(uid, year, term, group_id):
             """,
             (uid, year, term, group_id, year, term, uid)
         )
-        matches = cur.fetchall()
-    return matches or []
+        rows = cur.fetchall() or []
+
+    return [
+        {
+            "section_id": row[0],
+            "member_id": row[1],
+            "member_name": row[2],
+        }
+        for row in rows
+    ]

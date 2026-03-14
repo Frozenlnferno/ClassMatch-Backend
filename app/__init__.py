@@ -1,4 +1,8 @@
+from dotenv import load_dotenv
 from flask import Flask
+from urllib.parse import urlparse
+
+load_dotenv()
 
 from .routes.schedules import controller as schedules_controller
 from .routes.groups import controller as groups_controller
@@ -6,9 +10,20 @@ from .routes.users import controller as users_controller
 
 from .extensions import cors, init_db_pool
 from .config import Config
-from dotenv import load_dotenv
 
-load_dotenv()
+
+def _build_cors_origins(frontend_origin):
+    origins = set()
+    if frontend_origin:
+        origins.add(frontend_origin)
+
+        parsed = urlparse(frontend_origin)
+        if parsed.hostname in {"localhost", "127.0.0.1"} and parsed.port:
+            alt_host = "127.0.0.1" if parsed.hostname == "localhost" else "localhost"
+            alt_origin = parsed._replace(netloc=f"{alt_host}:{parsed.port}").geturl()
+            origins.add(alt_origin)
+
+    return sorted(origins)
 
 def create_app():
     app = Flask(__name__)
@@ -20,7 +35,7 @@ def create_app():
     # Initialize extensions
     cors.init_app(
         app, 
-        origins=[Config.FRONTEND_ORIGIN, app.config["FRONTEND_ORIGIN"]], 
+        origins=_build_cors_origins(app.config["FRONTEND_ORIGIN"]),
         supports_credentials=True,
         methods=["GET","POST","OPTIONS","PUT","DELETE","PATCH"],
         allow_headers=["Authorization", "Content-Type"]

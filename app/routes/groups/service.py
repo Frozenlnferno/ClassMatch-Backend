@@ -255,8 +255,19 @@ def get_user_groups(uid):
             """,
             (uid,)
         )
-        groups = cur.fetchall()
-    return groups or []
+        rows = cur.fetchall() or []
+
+    return [
+        {
+            "id": row[0],
+            "name": row[1],
+            "join_code": row[2],
+            "role": row[3],
+            "member_count": row[4],
+            "joinable": row[5],
+        }
+        for row in rows
+    ]
 
 def get_group_members(group_id):
     if not group_id:
@@ -272,8 +283,16 @@ def get_group_members(group_id):
             """,
             (group_id,)
         )
-        members = cur.fetchall()
-    return members or []
+        rows = cur.fetchall() or []
+
+    return [
+        {
+            "user_id": row[0],
+            "name": row[1],
+            "role": row[2],
+        }
+        for row in rows
+    ]
 
 def change_group_role(admin_uid, member_uid, group_id, new_role):
     if not admin_uid or not member_uid or not group_id or not new_role:
