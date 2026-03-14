@@ -6,6 +6,9 @@ from jwt import PyJWKClient
 from jwt.exceptions import InvalidTokenError, PyJWKClientError
 
 from app.config import Config
+from app.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 jwks_client = None
 
@@ -45,7 +48,10 @@ def require_auth(f):
         try:
             claims = verify_supabase_jwt(token)
         except InvalidTokenError as exc:
-            print(f"Auth verification failed: {exc}")
+            logger.warning(
+                "Auth verification failed",
+                extra={"error": str(exc)},
+            )
             return jsonify({"error": "Unauthorized"}), 401
 
         g.user = claims

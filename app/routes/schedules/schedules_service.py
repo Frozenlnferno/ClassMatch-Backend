@@ -4,11 +4,13 @@ import requests
 from PyPDF2 import PdfReader
 
 from app.utils.db import get_cursor
+from app.utils.logger import get_logger
 
 from .parser import parse_schedule_pdf
 
 UIUC_EXPLORER_URL = "https://courses.illinois.edu/cisapp/explorer/schedule/{year}/{term}/{subject}/{course}/{crn}.xml"
 UIUC_API_TIMEOUT_SECONDS = 10
+logger = get_logger(__name__)
 
 
 def _normalize_text(value):
@@ -161,7 +163,10 @@ def extract_schedule_identifiers_from_pdf(file):
             if extracted:
                 text += extracted + "\n"
         except Exception as exc:
-            print(f"Warning: Failed to extract text from page: {exc}")
+            logger.warning(
+                "Failed to extract text from PDF page",
+                extra={"error": str(exc)},
+            )
             continue
 
     if not text.strip():

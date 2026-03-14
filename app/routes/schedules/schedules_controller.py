@@ -1,6 +1,7 @@
 from flask import request, jsonify, g, Blueprint
 from app.utils.auth import require_auth
-from .service import (
+from app.utils.logger import get_logger
+from .schedules_service import (
     extract_schedule_identifiers_from_pdf,
     resolve_courses_from_uiuc,
     add_courses_by_pdf,
@@ -14,6 +15,7 @@ from .service import (
 from app.utils.validators import validate_year_term
 
 bp = Blueprint("schedules", __name__)
+logger = get_logger(__name__)
 
 @bp.route("/", methods=["GET"])
 @require_auth
@@ -28,19 +30,18 @@ def get_schedule_route():
         courses = get_user_schedule(user_id, year, term)
         return jsonify(courses)
     except Exception as e:
-        print(f"Error getting user schedule: {e}")
+        logger.exception("Error getting user schedule", extra={"error": str(e)})
         return jsonify({"error": "Failed to retrieve schedule"}), 500
 
 @bp.route("/list", methods=["GET"])
 @require_auth
 def get_all_schedules_route():
     user_id = g.user["sub"]
-    print(user_id)
     try:
         courses = get_all_schedules(user_id)
         return jsonify(courses)
     except Exception as e:
-        print(f"Error getting all user schedules: {e}")
+        logger.exception("Error getting all user schedules", extra={"error": str(e)})
         return jsonify({"error": "Failed to retrieve all user schedules"}), 500
 
 @bp.route("/", methods=["POST"])
@@ -69,11 +70,10 @@ def create_schedule():
         })
 
     except ValueError as e:
-        print(f"Schedule upload validation error: {e}")
+        logger.warning("Schedule upload validation error", extra={"error": str(e)})
         return jsonify({"error": str(e)}), 400
     except Exception as e:
-        # Database errors, unexpected exceptions
-        print(f"Unexpected error uploading schedule: {e}")
+        logger.exception("Unexpected error uploading schedule", extra={"error": str(e)})
         return jsonify({"error": "Failed to upload schedule. Please try again."}), 500
 
 @bp.route("/courses", methods=["POST"])
@@ -132,10 +132,10 @@ def add_schedule_courses():
             "year": year,
         })
     except ValueError as e:
-        print(f"Course add validation error: {e}")
+        logger.warning("Course add validation error", extra={"error": str(e)})
         return jsonify({"error": str(e)}), 400
     except Exception as e:
-        print(f"Error adding courses: {e}")
+        logger.exception("Error adding courses", extra={"error": str(e)})
         return jsonify({"error": "Failed to add courses"}), 500
 
 @bp.route("/", methods=["DELETE"])
@@ -151,7 +151,7 @@ def delete_schedule():
         remove_schedule(user_id, year, term)
         return jsonify({"message": "Schedule deleted successfully"})
     except Exception as e:
-        print(f"Error deleting schedule: {e}")
+        logger.exception("Error deleting schedule", extra={"error": str(e)})
         return jsonify({"error": "Failed to delete schedule"}), 500
 
 @bp.route("/courses", methods=["DELETE"])
@@ -172,7 +172,7 @@ def delete_schedule_courses():
         remove_courses_from_schedule(user_id, year, term, crns)
         return jsonify({"message": "Courses removed successfully"})
     except Exception as e:
-        print(f"Error removing courses: {e}")
+        logger.exception("Error removing courses", extra={"error": str(e)})
         return jsonify({"error": "Failed to remove courses"}), 500
 
 @bp.route("/matching-classmates", methods=["GET"])
@@ -192,5 +192,5 @@ def get_matching_classmates_route():
         matches = get_matching_classmates(user_id, year, term, group_id)
         return jsonify(matches)
     except Exception as e:
-        print(e)
+        logger.exception("Error getting matching classmates", extra={"error": str(e)})
         return jsonify({"error": "Internal server error"}), 500

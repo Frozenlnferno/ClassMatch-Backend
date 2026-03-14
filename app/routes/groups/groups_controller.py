@@ -1,8 +1,10 @@
 from flask import request, jsonify, g, Blueprint
 from app.utils.auth import require_auth
-from .service import create_group, join_group, get_user_groups, leave_group, kick_member, get_group_members, change_group_role, change_group_info
+from app.utils.logger import get_logger
+from .groups_service import create_group, join_group, get_user_groups, leave_group, kick_member, get_group_members, change_group_role, change_group_info
 
 bp = Blueprint("groups", __name__)
+logger = get_logger(__name__)
 
 @bp.route("/", methods=["GET"])
 @require_auth
@@ -12,6 +14,7 @@ def get_groups_route():
     try:
         groups = get_user_groups(user_id)
     except Exception as e:
+        logger.warning("Failed to fetch groups", extra={"error": str(e)})
         return jsonify({"error": str(e)}), 400
     return jsonify(groups), 200
 
@@ -34,6 +37,7 @@ def create_group_route():
             joinable,
         )
     except Exception as e:
+        logger.warning("Failed to create group", extra={"error": str(e)})
         return jsonify({"error": str(e)}), 400
     return jsonify({"status": "Group created successfully"}), 201
 
@@ -50,6 +54,7 @@ def join_group_route():
         if not status:
             return jsonify({"status": "User is already a member"}), 200
     except Exception as e:
+        logger.warning("Failed to join group", extra={"error": str(e)})
         return jsonify({"error": str(e)}), 400
     return jsonify({"status": "Group joined successfully"}), 200
 
@@ -65,6 +70,7 @@ def leave_group_route():
     try:
         leave_group(user_id, group_id)
     except Exception as e:
+        logger.warning("Failed to leave group", extra={"error": str(e)})
         return jsonify({"error": str(e)}), 400
     return jsonify({"status": "Left group successfully"}), 200
 
@@ -83,6 +89,7 @@ def update_group_info(group_id):
     try:
         change_group_info(admin_id, group_id, name, description, joinable)
     except Exception as e:
+        logger.warning("Failed to update group info", extra={"error": str(e)})
         return jsonify({"error": str(e)}), 400
     return jsonify({"status": "Group info changed successfully"}), 200
 
@@ -94,6 +101,7 @@ def get_members_route(group_id):
     try:
         members = get_group_members(group_id)
     except Exception as e:
+        logger.warning("Failed to fetch group members", extra={"error": str(e)})
         return jsonify({"error": str(e)}), 400
     return jsonify(members), 200
 
@@ -110,8 +118,10 @@ def kick_member_route(group_id):
     try:
         kick_member(admin_id, member_id, group_id)
     except PermissionError as e:
+        logger.warning("Permission denied kicking group member", extra={"error": str(e)})
         return jsonify({"error": str(e)}), 403
     except Exception as e:
+        logger.warning("Failed to kick group member", extra={"error": str(e)})
         return jsonify({"error": str(e)}), 400
     return jsonify({"status": "Member kicked successfully"}), 200
 
@@ -128,8 +138,10 @@ def change_role_route(group_id):
     try:
         change_group_role(admin_id, member_id, group_id, new_role)
     except PermissionError as e:
+        logger.warning("Permission denied changing member role", extra={"error": str(e)})
         return jsonify({"error": str(e)}), 403
     except Exception as e:
+        logger.warning("Failed to change group role", extra={"error": str(e)})
         return jsonify({"error": str(e)}), 400
     return jsonify({"status": "Role changed successfully"}), 200
 
@@ -145,6 +157,7 @@ def join_group_by_url_route(join_code):
         if group_id == -1:
             return jsonify({"status": "User is already a member"}), 200
     except Exception as e:
+        logger.warning("Failed to join group by URL", extra={"error": str(e)})
         return jsonify({"error": str(e)}), 400
     return jsonify({
         "status": "Group joined successfully",
