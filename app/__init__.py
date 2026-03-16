@@ -34,6 +34,7 @@ def create_app():
     app = Flask(__name__)
     app.config.from_object(Config)
     logger = get_logger(__name__)
+    log_options_requests = app.config.get("LOG_OPTIONS_REQUESTS", False)
     
     # Disable strict trailing slash to prevent redirects
     app.url_map.strict_slashes = False
@@ -62,13 +63,17 @@ def create_app():
         if start is not None:
             response_time_ms = round((perf_counter() - start) * 1000, 2)
 
-        logger.info(
-            "HTTP request completed",
-            extra={
-                "status_code": response.status_code,
-                "response_time_ms": response_time_ms,
-            },
-        )
+        log_extra = {
+            "status_code": response.status_code,
+            "response_time_ms": response_time_ms,
+        }
+
+        # Preflight CORS requests are high-volume and usually low-value in normal logs.
+        if request.method == "OPTIONS" and response.status_code < 400 and not log_options_requests:
+            logger.debug("HTTP preflight request completed", extra=log_extra)
+        else:
+            logger.info("HTTP request completed", extra=log_extra)
+
         response.headers["X-Request-ID"] = getattr(g, "request_id", "-")
         return response
 

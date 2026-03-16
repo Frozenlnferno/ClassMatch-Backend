@@ -16,7 +16,7 @@ def validate_year_term():
     term = request.args.get("term")
     year = request.args.get("year")
 
-    if not term or term.lower() not in {"fall", "winter", "spring", "summer"}:
+    if not term or term.lower() not in {"fall", "spring", "summer"}:
         return None, None, jsonify({"error": "Invalid term"}), 400
 
     if not year or not year.isdigit():

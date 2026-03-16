@@ -1,24 +1,139 @@
-from app.utils.db import get_cursor
 import secrets
 import string
 
-ALPHABET = string.ascii_uppercase  # A–Z
+from app.utils.db import get_cursor
+
+ALPHABET = string.ascii_uppercase  # A-Z
+UNSET = object()
+
 
 def generate_join_code(length=10):
     return ''.join(secrets.choice(ALPHABET) for _ in range(length))
 
-def create_group(uid, groupName, description, joinable=True):
+
+def _get_next_group_owner(cur, group_id):
+    cur.execute(
+        """
+            SELECT user_id
+            FROM group_members
+            WHERE group_id = %s
+                AND role = 'admin'
+            ORDER BY joined_at ASC
+            LIMIT 1;
+        """,
+        (group_id,)
+    )
+    next_owner = cur.fetchone()
+    if next_owner:
+        return next_owner[0]
+
+    cur.execute(
+        """
+            SELECT user_id
+            FROM group_members
+            WHERE group_id = %s
+                AND role = 'member'
+            ORDER BY joined_at ASC
+            LIMIT 1;
+        """,
+        (group_id,)
+    )
+    next_owner = cur.fetchone()
+    if next_owner:
+        return next_owner[0]
+
+    return None
+
+
+def reassign_or_delete_group(cur, group_id):
+    next_owner_id = _get_next_group_owner(cur, group_id)
+    if next_owner_id:
+        cur.execute(
+            """
+                UPDATE group_members
+                SET role = 'owner'
+                WHERE group_id = %s AND user_id = %s;
+            """,
+            (group_id, next_owner_id)
+        )
+        cur.execute(
+            """
+                UPDATE groups
+                SET created_by = %s
+                WHERE id = %s;
+            """,
+            (next_owner_id, group_id)
+        )
+        return True
+
+    cur.execute(
+        """
+            DELETE FROM groups
+            WHERE id = %s;
+        """,
+        (group_id,)
+    )
+    return True
+
+
+def remove_group_member(cur, uid, group_id):
+    if not uid or not group_id:
+        raise ValueError("Invalid input: uid and group_id are required")
+
+    cur.execute(
+        """
+            SELECT role
+            FROM group_members
+            WHERE group_id = %s AND user_id = %s;
+        """,
+        (group_id, uid)
+    )
+    membership = cur.fetchone()
+    if not membership:
+        raise ValueError("User is not a member of the group")
+
+    role = membership[0]
+
+    cur.execute(
+        """
+            DELETE FROM group_members
+            WHERE group_id = %s AND user_id = %s;
+        """,
+        (group_id, uid)
+    )
+
+    if role != 'owner':
+        return True
+
+    return reassign_or_delete_group(cur, group_id)
+
+
+def _require_group_admin_or_owner(cur, group_id, user_id):
+    cur.execute(
+        """
+            SELECT role FROM group_members
+            WHERE group_id = %s AND user_id = %s;
+        """,
+        (group_id, user_id)
+    )
+    membership = cur.fetchone()
+    if not membership or membership[0] not in ('admin', 'owner'):
+        raise PermissionError("User does not have permission to change group settings")
+    return membership[0]
+
+
+def create_group(uid, groupName, description, joinable=True, group_icon_url=None):
     if not uid or not groupName:
         raise ValueError("Invalid input: uid and groupName are required")
 
     with get_cursor() as cur:
         cur.execute(
             """
-                INSERT INTO groups (name, description, created_by, join_code, joinable)
-                VALUES (%s, %s, %s, %s, %s)
+                INSERT INTO groups (name, description, created_by, join_code, joinable, group_icon_url)
+                VALUES (%s, %s, %s, %s, %s, %s)
                 RETURNING id;
             """,
-            (groupName, description, uid, generate_join_code(), joinable)
+            (groupName, description, uid, generate_join_code(), joinable, group_icon_url)
         )
         group_id = cur.fetchone()[0]
         cur.execute(
@@ -30,12 +145,12 @@ def create_group(uid, groupName, description, joinable=True):
         )
     return True
 
+
 def join_group(uid, join_code):
     if not uid or not join_code:
         raise ValueError("Invalid input: uid and join_code are required")
 
     with get_cursor() as cur:
-        # Check if group with join_code exists
         cur.execute(
             """
                 SELECT id, joinable FROM groups WHERE join_code = %s;
@@ -46,13 +161,11 @@ def join_group(uid, join_code):
         if not group_data:
             raise ValueError("Invalid join code")
 
-        # Check if open
         group_id = group_data[0]
         is_joinable = group_data[1]
         if not is_joinable:
             raise ValueError("Group is not joinable")
 
-        # Try to add user as member
         cur.execute(
             """
                 INSERT INTO group_members (group_id, user_id, role)
@@ -64,88 +177,20 @@ def join_group(uid, join_code):
         )
         result = cur.fetchone()
         if not result:
-            return -1 # User is already member
+            return -1
     return group_id
+
 
 def leave_group(uid, group_id):
     if not uid or not group_id:
         raise ValueError("Invalid input: uid and group_id are required")
 
     with get_cursor() as cur:
-        cur.execute(
-            """
-                SELECT role FROM group_members
-                WHERE group_id = %s AND user_id = %s;
-            """,
-            (group_id, uid)
-        )
-        role = cur.fetchone()
-        if not role:
-            raise ValueError("User is not a member of the group")
-        
-        # Remove user from group
-        cur.execute( 
-            """
-                DELETE FROM group_members
-                WHERE group_id = %s AND user_id = %s;
-            """,
-            (group_id, uid)
-        )
-
-        if role[0] == 'owner':
-            # Upon leaving, transfer ownership to oldest joining admin and if none, oldest member
-            cur.execute(
-                """
-                    SELECT user_id FROM group_members
-                    WHERE group_id = %s AND role = 'admin'
-                    ORDER BY joined_at ASC
-                    LIMIT 1;
-                """,
-                (group_id,)
-            )
-            admin_user_id = cur.fetchone()
-            if admin_user_id:
-                cur.execute(
-                    """
-                        UPDATE group_members
-                        SET role = 'owner'
-                        WHERE group_id = %s AND user_id = %s;
-                    """,
-                    (group_id, admin_user_id[0])
-                )
-            else:
-                # Find oldest member to transfer ownership
-                cur.execute(
-                    """
-                        SELECT user_id FROM group_members
-                        WHERE group_id = %s AND role = 'member'
-                        ORDER BY joined_at ASC
-                        LIMIT 1;
-                    """,
-                    (group_id,)
-                )
-                oldest_member = cur.fetchone()
-                if oldest_member:
-                    cur.execute(
-                        """
-                            UPDATE group_members
-                            SET role = 'owner'
-                            WHERE group_id = %s AND user_id = %s;
-                        """,
-                        (group_id, oldest_member[0])
-                    )
-                else:
-                    # No other members, delete group
-                    cur.execute(
-                        """
-                            DELETE FROM groups
-                            WHERE id = %s;
-                        """,
-                        (group_id,)
-                    )
+        remove_group_member(cur, uid, group_id)
     return True
 
-def change_group_info(admin_uid, group_id, name, description, joinable):
+
+def change_group_info(admin_uid, group_id, name, description, joinable, group_icon_url=UNSET):
     if not admin_uid or not group_id:
         raise ValueError("Invalid input: admin_uid and group_id are required")
 
@@ -155,7 +200,7 @@ def change_group_info(admin_uid, group_id, name, description, joinable):
     if name is not None:
         fields.append("name = %s")
         values.append(name)
-    
+
     if description is not None:
         fields.append("description = %s")
         values.append(description)
@@ -164,9 +209,13 @@ def change_group_info(admin_uid, group_id, name, description, joinable):
         fields.append("joinable = %s")
         values.append(joinable)
 
+    if group_icon_url is not UNSET:
+        fields.append("group_icon_url = %s")
+        values.append(group_icon_url)
+
     if not fields:
-        return 0  # nothing to update
-    
+        return 0
+
     values.append(group_id)
 
     query = f"""
@@ -176,28 +225,16 @@ def change_group_info(admin_uid, group_id, name, description, joinable):
     """
 
     with get_cursor() as cur:
-        # Check if admin_uid is an admin of the group
-        cur.execute(
-            """
-                SELECT role FROM group_members
-                WHERE group_id = %s AND user_id = %s;
-            """,
-            (group_id, admin_uid)
-        )
-        admin_data = cur.fetchone()
-        if not admin_data or (admin_data[0] != 'admin' and admin_data[0] != 'owner'):
-            raise PermissionError("User does not have permission to change group settings")
-
-        # Update group's info
+        _require_group_admin_or_owner(cur, group_id, admin_uid)
         cur.execute(query, values)
     return True
+
 
 def kick_member(admin_uid, member_uid, group_id):
     if not admin_uid or not member_uid or not group_id:
         raise ValueError("Invalid input: admin_uid, member_uid, and group_id are required")
 
     with get_cursor() as cur:
-        # Check if admin_uid is an admin of the group
         cur.execute(
             """
                 SELECT role FROM group_members
@@ -209,7 +246,6 @@ def kick_member(admin_uid, member_uid, group_id):
         if not admin_data or (admin_data[0] != 'admin' and admin_data[0] != 'owner'):
             raise PermissionError("User does not have permission to kick members")
 
-        # Check if admin_uid has the permission to kick member_uid (from role hierarchy)
         cur.execute(
             """
                 SELECT role FROM group_members
@@ -221,7 +257,6 @@ def kick_member(admin_uid, member_uid, group_id):
         if not member_data or member_data[0] == 'owner' or (admin_data[0] != 'owner' and member_data[0] == 'admin'):
             raise PermissionError("Cannot kick this member")
 
-        # Remove member_uid from the group
         cur.execute(
             """
                 DELETE FROM group_members
@@ -230,6 +265,7 @@ def kick_member(admin_uid, member_uid, group_id):
             (group_id, member_uid)
         )
     return True
+
 
 def get_user_groups(uid):
     if not uid:
@@ -248,7 +284,8 @@ def get_user_groups(uid):
                     FROM group_members gm2
                     WHERE gm2.group_id = g.id
                 ) AS member_count,
-                g.joinable
+                g.joinable,
+                g.group_icon_url
                 FROM groups g
                 JOIN group_members gm ON g.id = gm.group_id
                 WHERE gm.user_id = %s;
@@ -265,9 +302,11 @@ def get_user_groups(uid):
             "role": row[3],
             "member_count": row[4],
             "joinable": row[5],
+            "group_icon_url": row[6],
         }
         for row in rows
     ]
+
 
 def get_group_members(group_id):
     if not group_id:
@@ -276,10 +315,11 @@ def get_group_members(group_id):
     with get_cursor() as cur:
         cur.execute(
             """
-                SELECT u.id, u.name, gm.role
+                SELECT u.id, u.name, gm.role, gm.joined_at, u.avatar_url
                 FROM users u
                 JOIN group_members gm ON u.id = gm.user_id
-                WHERE gm.group_id = %s;
+                WHERE gm.group_id = %s
+                ORDER BY gm.joined_at ASC;
             """,
             (group_id,)
         )
@@ -290,9 +330,12 @@ def get_group_members(group_id):
             "user_id": row[0],
             "name": row[1],
             "role": row[2],
+            "joined_at": row[3].isoformat().replace("+00:00", "Z") if row[3] else None,
+            "avatar_url": row[4],
         }
         for row in rows
     ]
+
 
 def change_group_role(admin_uid, member_uid, group_id, new_role):
     if not admin_uid or not member_uid or not group_id or not new_role:
@@ -303,7 +346,6 @@ def change_group_role(admin_uid, member_uid, group_id, new_role):
         raise ValueError("Invalid role specified")
 
     with get_cursor() as cur:
-        # Check if admin_uid is an admin of the group
         cur.execute(
             """
                 SELECT role FROM group_members
@@ -315,7 +357,6 @@ def change_group_role(admin_uid, member_uid, group_id, new_role):
         if not admin_data or (admin_data[0] != 'admin' and admin_data[0] != 'owner'):
             raise PermissionError("User does not have permission to change roles")
 
-        # Check if admin_uid has the permission to change member_uid's role (from role hierarchy)
         cur.execute(
             """
                 SELECT role FROM group_members
@@ -329,7 +370,6 @@ def change_group_role(admin_uid, member_uid, group_id, new_role):
         if member_data[0] == 'owner' or (admin_data[0] != 'owner' and member_data[0] == 'admin'):
             raise PermissionError("Cannot change this member's role")
 
-        # Update member's role
         cur.execute(
             """
                 UPDATE group_members

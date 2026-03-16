@@ -1,4 +1,5 @@
 import xml.etree.ElementTree as ET
+from datetime import datetime
 
 import requests
 from PyPDF2 import PdfReader
@@ -51,6 +52,87 @@ def _find_all_text(root, names):
         if text:
             values.append(text)
     return values
+
+
+def _find_first_text_or_attribute(root, element_names, attribute_names):
+    text = _find_first_text(root, element_names)
+    if text:
+        return text
+    return _find_first_attribute(root, element_names, attribute_names)
+
+
+def _iter_meeting_elements(root):
+    meeting_names = {
+        "meeting",
+        "sectionMeeting",
+        "detailedMeeting",
+        "detailedSectionMeeting",
+        "meetingInformation",
+        "meetingInfo",
+        "meetingTime",
+        "time",
+    }
+    for element in root.iter():
+        if _local_name(element.tag) in meeting_names:
+            yield element
+
+
+def _parse_time_value(raw_value):
+    normalized = _normalize_text(raw_value)
+    if not normalized:
+        return None
+
+    if normalized.upper() in {"ARRANGED", "TBA", "N/A"}:
+        return None
+
+    for time_format in ("%H:%M", "%H:%M:%S", "%I:%M %p", "%I:%M%p"):
+        try:
+            return datetime.strptime(normalized, time_format).time()
+        except ValueError:
+            continue
+
+    return None
+
+
+def _extract_time_from_element(root, tag_names, attribute_names):
+    raw_value = _find_first_text_or_attribute(root, tag_names, attribute_names)
+    return _parse_time_value(raw_value)
+
+
+def _extract_days_from_element(root):
+    raw_value = _find_first_text_or_attribute(
+        root,
+        {"daysOfTheWeek", "daysOfWeek", "days"},
+        {"daysOfTheWeek", "daysOfWeek", "days"},
+    )
+    normalized = _normalize_text(raw_value)
+    if not normalized or normalized.upper() in {"ARRANGED", "TBA", "N/A"}:
+        return None
+    return normalized.upper()
+
+
+def _extract_meeting_details(root):
+    for meeting_element in _iter_meeting_elements(root):
+        start_time = _extract_time_from_element(
+            meeting_element,
+            {"startTime", "start"},
+            {"startTime", "start"},
+        )
+        end_time = _extract_time_from_element(
+            meeting_element,
+            {"endTime", "end"},
+            {"endTime", "end"},
+        )
+        days_of_week = _extract_days_from_element(meeting_element)
+
+        if start_time or end_time or days_of_week:
+            return start_time, end_time, days_of_week
+
+    return (
+        _extract_time_from_element(root, {"startTime", "start"}, {"startTime", "start"}),
+        _extract_time_from_element(root, {"endTime", "end"}, {"endTime", "end"}),
+        _extract_days_from_element(root),
+    )
 
 
 def _extract_subject_code(root):
@@ -128,25 +210,6 @@ def _extract_room_number(root):
     return _find_first_text(root, {"roomNumber", "room"})
 
 
-def _extract_meeting_time(root, tag_names):
-    raw_value = _find_first_text(root, tag_names)
-    if not raw_value:
-        return None
-
-    for time_format in ("%H:%M", "%H:%M:%S"):
-        try:
-            import datetime
-            return datetime.datetime.strptime(raw_value, time_format).time()
-        except ValueError:
-            continue
-
-    return None
-
-
-def _extract_days_of_week(root):
-    return _find_first_text(root, {"daysOfWeek", "days"})
-
-
 def extract_schedule_identifiers_from_pdf(file):
     try:
         reader = PdfReader(file)
@@ -216,6 +279,7 @@ def _fetch_uiuc_course(year, term, identifier):
     api_subject = _extract_subject_code(root) or subject
     api_course_number = _extract_course_number(root) or course_number
     api_crn = _extract_crn(root) or crn
+    start_time, end_time, days_of_week = _extract_meeting_details(root)
 
     if not title:
         raise ValueError(
@@ -242,9 +306,9 @@ def _fetch_uiuc_course(year, term, identifier):
         "Instructor": _extract_instructors(root) or None,
         "Building": _extract_building(root) or None,
         "Room Number": _extract_room_number(root) or None,
-        "Start Time": _extract_meeting_time(root, {"startTime"}) ,
-        "End Time": _extract_meeting_time(root, {"endTime"}),
-        "Days of Week": _extract_days_of_week(root) or None,
+        "Start Time": start_time,
+        "End Time": end_time,
+        "Days of Week": days_of_week,
     }
 
 
@@ -611,6 +675,152 @@ def get_matching_classmates(uid, year, term, group_id):
             "section_id": row[0],
             "member_id": row[1],
             "member_name": row[2],
+        }
+        for row in rows
+    ]
+
+
+def _assert_group_member(cur, uid, group_id):
+    cur.execute(
+        """
+            SELECT 1
+            FROM group_members
+            WHERE group_id = %s AND user_id = %s
+            LIMIT 1;
+        """,
+        (group_id, uid)
+    )
+    if not cur.fetchone():
+        raise PermissionError("User is not a member of the group")
+
+
+def get_past_classmates(uid, year, term, group_id):
+    with get_cursor() as cur:
+        _assert_group_member(cur, uid, group_id)
+
+        cur.execute(
+            """
+                WITH requested_term AS (
+                  SELECT
+                    %s::integer AS target_year,
+                    %s::text AS target_term,
+                    CASE %s::text
+                      WHEN 'spring' THEN 1
+                      WHEN 'summer' THEN 2
+                      WHEN 'fall' THEN 3
+                    END AS target_term_order
+                ),
+                my_schedule AS (
+                  SELECT s.id
+                  FROM schedules s
+                  WHERE s.user_id = %s
+                    AND s.year = %s
+                    AND s.term = %s
+                  LIMIT 1
+                ),
+                current_classes AS (
+                  SELECT
+                    MIN(sec.id) AS section_id,
+                    c.id AS class_id,
+                    c.subject,
+                    c.number,
+                    c.title
+                  FROM my_schedule ms
+                  JOIN schedule_sections ss ON ss.schedule_id = ms.id
+                  JOIN sections sec ON sec.id = ss.section_id
+                  JOIN classes c ON c.id = sec.class_id
+                  GROUP BY c.id, c.subject, c.number, c.title
+                ),
+                ranked_matches AS (
+                  SELECT
+                    cc.section_id,
+                    cc.class_id,
+                    cc.subject,
+                    cc.number,
+                    cc.title,
+                    u.id AS member_id,
+                    u.name AS member_name,
+                    u.avatar_url AS member_avatar_url,
+                    sec.year AS past_year,
+                    sec.term AS past_term,
+                    sec.id AS past_section_id,
+                    sec.section AS past_section,
+                    sec.crn AS past_crn,
+                    ROW_NUMBER() OVER (
+                      PARTITION BY cc.class_id, u.id
+                      ORDER BY
+                        sec.year DESC,
+                        CASE sec.term
+                          WHEN 'fall' THEN 3
+                          WHEN 'summer' THEN 2
+                          WHEN 'spring' THEN 1
+                        END DESC,
+                        sec.id DESC
+                    ) AS match_rank
+                  FROM current_classes cc
+                  JOIN group_members gm
+                    ON gm.group_id = %s
+                  JOIN users u
+                    ON u.id = gm.user_id
+                  JOIN schedules s
+                    ON s.user_id = u.id
+                  JOIN schedule_sections ss
+                    ON ss.schedule_id = s.id
+                  JOIN sections sec
+                    ON sec.id = ss.section_id
+                  JOIN requested_term rt
+                    ON 1 = 1
+                  WHERE u.id <> %s
+                    AND sec.class_id = cc.class_id
+                    AND (
+                      s.year < rt.target_year
+                      OR (
+                        s.year = rt.target_year
+                        AND CASE s.term
+                          WHEN 'spring' THEN 1
+                          WHEN 'summer' THEN 2
+                          WHEN 'fall' THEN 3
+                        END < rt.target_term_order
+                      )
+                    )
+                )
+                SELECT
+                  section_id,
+                  class_id,
+                  subject,
+                  number,
+                  title,
+                  member_id,
+                  member_name,
+                  member_avatar_url,
+                  past_year,
+                  past_term,
+                  past_section_id,
+                  past_section,
+                  past_crn
+                FROM ranked_matches
+                WHERE match_rank = 1
+                ORDER BY subject, number, member_name;
+            """,
+            (year, term, term, uid, year, term, group_id, uid)
+        )
+        rows = cur.fetchall() or []
+
+    return [
+        {
+            "section_id": row[0],
+            "class_id": row[1],
+            "subject": row[2],
+            "number": row[3],
+            "title": row[4],
+            "member_id": row[5],
+            "member_name": row[6],
+            "member_avatar_url": row[7],
+            "past_year": row[8],
+            "past_term": row[9],
+            "past_section_id": row[10],
+            "past_section": row[11],
+            "past_crn": row[12],
         }
         for row in rows
     ]

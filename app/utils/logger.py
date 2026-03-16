@@ -54,6 +54,10 @@ def configure_logging():
     stream_handler.setFormatter(formatter)
     root_logger.addHandler(stream_handler)
 
+    # Avoid duplicate per-request access logs when app-level request logging is enabled.
+    werkzeug_logger = logging.getLogger("werkzeug")
+    werkzeug_logger.setLevel(logging.WARNING)
+
 
 def get_logger(name):
     return logging.getLogger(name)

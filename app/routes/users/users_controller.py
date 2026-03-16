@@ -1,11 +1,77 @@
+import os
+from uuid import uuid4
+
 from flask import Blueprint, request, jsonify, g
 from app.utils.auth import require_auth
 from app.utils.logger import get_logger
+from werkzeug.utils import secure_filename
 
-from .users_service import get_self_info, get_user_info, update_self_info
+from app.utils.supabase_admin import upload_public_file
+from .users_service import delete_self_account, get_self_info, get_user_info, update_self_info
 
 bp = Blueprint("users", __name__)
 logger = get_logger(__name__)
+MAX_IMAGE_SIZE_BYTES = 5 * 1024 * 1024
+ALLOWED_IMAGE_MIME_TYPES = {
+    "image/gif": "gif",
+    "image/jpeg": "jpg",
+    "image/jpg": "jpg",
+    "image/png": "png",
+    "image/webp": "webp",
+}
+ALLOWED_IMAGE_EXTENSIONS = {
+    "gif": "image/gif",
+    "jpg": "image/jpeg",
+    "jpeg": "image/jpeg",
+    "png": "image/png",
+    "webp": "image/webp",
+}
+
+
+def _get_image_upload(*field_names):
+    for field_name in field_names:
+        uploaded_file = request.files.get(field_name)
+        if uploaded_file and uploaded_file.filename:
+            return uploaded_file
+    raise ValueError("No image file uploaded")
+
+
+def _get_upload_size(uploaded_file):
+    current_position = uploaded_file.stream.tell()
+    uploaded_file.stream.seek(0, os.SEEK_END)
+    size = uploaded_file.stream.tell()
+    uploaded_file.stream.seek(current_position)
+    return size
+
+
+def _normalize_image_type(uploaded_file):
+    raw_content_type = (uploaded_file.content_type or "").split(";", 1)[0].strip().lower()
+    if raw_content_type in ALLOWED_IMAGE_MIME_TYPES:
+        return raw_content_type, ALLOWED_IMAGE_MIME_TYPES[raw_content_type]
+
+    filename = secure_filename(uploaded_file.filename or "")
+    if "." in filename:
+        extension = filename.rsplit(".", 1)[1].lower()
+        if extension in ALLOWED_IMAGE_EXTENSIONS:
+            return ALLOWED_IMAGE_EXTENSIONS[extension], "jpg" if extension == "jpeg" else extension
+
+    raise ValueError("File must be a PNG, JPEG, GIF, or WEBP image")
+
+
+def _read_validated_image(*field_names):
+    uploaded_file = _get_image_upload(*field_names)
+    size = _get_upload_size(uploaded_file)
+    if size <= 0:
+        raise ValueError("Image file is empty")
+    if size >= MAX_IMAGE_SIZE_BYTES:
+        raise ValueError("Image file must be smaller than 5 MB")
+
+    content_type, extension = _normalize_image_type(uploaded_file)
+    uploaded_file.stream.seek(0)
+    file_bytes = uploaded_file.read()
+    if not file_bytes:
+        raise ValueError("Image file is empty")
+    return file_bytes, content_type, extension
 
 @bp.route("/me", methods=["GET"])
 @require_auth
@@ -33,6 +99,38 @@ def update_current_user_info():
         logger.exception("Error updating self info", extra={"error": str(e)})
         return jsonify({"error": "Failed to update self info"}), 500
     return jsonify({"status": "Successfully updated self info"}), 200
+
+
+@bp.route("/me/avatar", methods=["POST"])
+@require_auth
+def upload_current_user_avatar():
+    user_id = g.user["sub"]
+
+    try:
+        file_bytes, content_type, extension = _read_validated_image("image", "avatar")
+        object_path = f"avatars/{user_id}/{uuid4().hex}.{extension}"
+        avatar_url = upload_public_file(object_path, file_bytes, content_type)
+        update_self_info(user_id, avatar_url=avatar_url)
+    except ValueError as e:
+        logger.warning("Invalid avatar upload", extra={"error": str(e)})
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        logger.exception("Error uploading avatar", extra={"error": str(e)})
+        return jsonify({"error": "Failed to upload avatar"}), 500
+
+    return jsonify({"avatar_url": avatar_url}), 200
+
+
+@bp.route("/me", methods=["DELETE"])
+@require_auth
+def delete_current_user_account():
+    try:
+        user_id = g.user["sub"]
+        delete_self_account(user_id)
+    except Exception as e:
+        logger.exception("Error deleting self account", extra={"error": str(e)})
+        return jsonify({"error": "Failed to delete account"}), 500
+    return jsonify({"status": "Account deleted successfully"}), 200
 
 @bp.route("/<user_id>", methods=["GET"])
 @require_auth

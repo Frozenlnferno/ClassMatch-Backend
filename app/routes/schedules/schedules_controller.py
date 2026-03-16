@@ -8,6 +8,7 @@ from .schedules_service import (
     add_courses_by_crn,
     get_user_schedule,
     get_matching_classmates,
+    get_past_classmates,
     remove_schedule,
     remove_courses_from_schedule,
     get_all_schedules,
@@ -193,4 +194,28 @@ def get_matching_classmates_route():
         return jsonify(matches)
     except Exception as e:
         logger.exception("Error getting matching classmates", extra={"error": str(e)})
+        return jsonify({"error": "Internal server error"}), 500
+
+
+@bp.route("/past-classmates", methods=["GET"])
+@require_auth
+def get_past_classmates_route():
+    user_id = g.user["sub"]
+    group_id = request.args.get("group_id")
+
+    year, term, error_response, error_code = validate_year_term()
+    if error_response:
+        return error_response, error_code
+
+    if not group_id:
+        return jsonify({"error": "Invalid group_id"}), 400
+
+    try:
+        matches = get_past_classmates(user_id, year, term, group_id)
+        return jsonify(matches)
+    except PermissionError as e:
+        logger.warning("Permission denied getting past classmates", extra={"error": str(e)})
+        return jsonify({"error": str(e)}), 403
+    except Exception as e:
+        logger.exception("Error getting past classmates", extra={"error": str(e)})
         return jsonify({"error": "Internal server error"}), 500

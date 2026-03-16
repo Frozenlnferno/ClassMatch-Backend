@@ -1,10 +1,77 @@
+import os
+from uuid import uuid4
+
 from flask import request, jsonify, g, Blueprint
 from app.utils.auth import require_auth
 from app.utils.logger import get_logger
-from .groups_service import create_group, join_group, get_user_groups, leave_group, kick_member, get_group_members, change_group_role, change_group_info
+from werkzeug.utils import secure_filename
+
+from app.utils.supabase_admin import upload_public_file
+from .groups_service import UNSET, create_group, join_group, get_user_groups, leave_group, kick_member, get_group_members, change_group_role, change_group_info
 
 bp = Blueprint("groups", __name__)
 logger = get_logger(__name__)
+MAX_IMAGE_SIZE_BYTES = 5 * 1024 * 1024
+ALLOWED_IMAGE_MIME_TYPES = {
+    "image/gif": "gif",
+    "image/jpeg": "jpg",
+    "image/jpg": "jpg",
+    "image/png": "png",
+    "image/webp": "webp",
+}
+ALLOWED_IMAGE_EXTENSIONS = {
+    "gif": "image/gif",
+    "jpg": "image/jpeg",
+    "jpeg": "image/jpeg",
+    "png": "image/png",
+    "webp": "image/webp",
+}
+
+
+def _get_image_upload(*field_names):
+    for field_name in field_names:
+        uploaded_file = request.files.get(field_name)
+        if uploaded_file and uploaded_file.filename:
+            return uploaded_file
+    raise ValueError("No image file uploaded")
+
+
+def _get_upload_size(uploaded_file):
+    current_position = uploaded_file.stream.tell()
+    uploaded_file.stream.seek(0, os.SEEK_END)
+    size = uploaded_file.stream.tell()
+    uploaded_file.stream.seek(current_position)
+    return size
+
+
+def _normalize_image_type(uploaded_file):
+    raw_content_type = (uploaded_file.content_type or "").split(";", 1)[0].strip().lower()
+    if raw_content_type in ALLOWED_IMAGE_MIME_TYPES:
+        return raw_content_type, ALLOWED_IMAGE_MIME_TYPES[raw_content_type]
+
+    filename = secure_filename(uploaded_file.filename or "")
+    if "." in filename:
+        extension = filename.rsplit(".", 1)[1].lower()
+        if extension in ALLOWED_IMAGE_EXTENSIONS:
+            return ALLOWED_IMAGE_EXTENSIONS[extension], "jpg" if extension == "jpeg" else extension
+
+    raise ValueError("File must be a PNG, JPEG, GIF, or WEBP image")
+
+
+def _read_validated_image(*field_names):
+    uploaded_file = _get_image_upload(*field_names)
+    size = _get_upload_size(uploaded_file)
+    if size <= 0:
+        raise ValueError("Image file is empty")
+    if size >= MAX_IMAGE_SIZE_BYTES:
+        raise ValueError("Image file must be smaller than 5 MB")
+
+    content_type, extension = _normalize_image_type(uploaded_file)
+    uploaded_file.stream.seek(0)
+    file_bytes = uploaded_file.read()
+    if not file_bytes:
+        raise ValueError("Image file is empty")
+    return file_bytes, content_type, extension
 
 @bp.route("/", methods=["GET"])
 @require_auth
@@ -28,6 +95,7 @@ def create_group_route():
         # accept joinable flag from client (default True)
         data = request.get_json(silent=True) or {}
         joinable = data["joinable"] if "joinable" in data else None
+        group_icon_url = data["group_icon_url"] if "group_icon_url" in data else None
         if joinable is None:
             joinable = True
         create_group(
@@ -35,6 +103,7 @@ def create_group_route():
             data["groupName"] if "groupName" in data else None,
             data["description"] if "description" in data else None,
             joinable,
+            group_icon_url,
         )
     except Exception as e:
         logger.warning("Failed to create group", extra={"error": str(e)})
@@ -85,9 +154,13 @@ def update_group_info(group_id):
     name = data["name"] if "name" in data else None
     description = data["description"] if "description" in data else None
     joinable = data["joinable"] if "joinable" in data else None
+    group_icon_url = data["group_icon_url"] if "group_icon_url" in data else UNSET
 
     try:
-        change_group_info(admin_id, group_id, name, description, joinable)
+        change_group_info(admin_id, group_id, name, description, joinable, group_icon_url)
+    except PermissionError as e:
+        logger.warning("Permission denied updating group info", extra={"error": str(e)})
+        return jsonify({"error": str(e)}), 403
     except Exception as e:
         logger.warning("Failed to update group info", extra={"error": str(e)})
         return jsonify({"error": str(e)}), 400
@@ -163,3 +236,26 @@ def join_group_by_url_route(join_code):
         "status": "Group joined successfully",
         "group_id": group_id
         }), 200
+
+
+@bp.route("/<group_id>/icon", methods=["POST"])
+@require_auth
+def upload_group_icon_route(group_id):
+    admin_id = g.user["sub"]
+
+    try:
+        file_bytes, content_type, extension = _read_validated_image("image", "icon")
+        object_path = f"groups/{group_id}/{uuid4().hex}.{extension}"
+        public_url = upload_public_file(object_path, file_bytes, content_type)
+        change_group_info(admin_id, group_id, None, None, None, public_url)
+    except PermissionError as e:
+        logger.warning("Permission denied uploading group icon", extra={"error": str(e)})
+        return jsonify({"error": str(e)}), 403
+    except ValueError as e:
+        logger.warning("Invalid group icon upload", extra={"error": str(e)})
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        logger.exception("Failed to upload group icon", extra={"error": str(e)})
+        return jsonify({"error": "Failed to upload group icon"}), 500
+
+    return jsonify({"group_icon_url": public_url}), 200

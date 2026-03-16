@@ -1,4 +1,7 @@
+from app.routes.groups.groups_service import reassign_or_delete_group, remove_group_member
 from app.utils.db import get_cursor
+from app.utils.supabase_admin import get_supabase_admin_client
+
 
 def get_self_info(user_id):
     with get_cursor() as cur:
@@ -18,6 +21,7 @@ def get_self_info(user_id):
         "avatar_url": user[5],
     }
 
+
 def get_user_info(user_id):
     with get_cursor() as cur:
         cur.execute(
@@ -34,6 +38,7 @@ def get_user_info(user_id):
         "bio": user[3],
         "avatar_url": user[4],
     }
+
 
 def update_self_info(user_id, name=None, bio=None, avatar_url=None):
     fields = []
@@ -52,7 +57,7 @@ def update_self_info(user_id, name=None, bio=None, avatar_url=None):
         values.append(avatar_url)
 
     if not fields:
-        return 0  # nothing to update
+        return 0
 
     values.append(user_id)
 
@@ -65,3 +70,39 @@ def update_self_info(user_id, name=None, bio=None, avatar_url=None):
     with get_cursor() as cur:
         cur.execute(query, values)
 
+
+def _delete_supabase_auth_user(user_id):
+    supabase_admin = get_supabase_admin_client()
+    supabase_admin.auth.admin.delete_user(user_id)
+
+
+def delete_self_account(user_id):
+    with get_cursor() as cur:
+        cur.execute(
+            """
+                SELECT id
+                FROM groups
+                WHERE created_by = %s
+                ORDER BY created_at ASC, id ASC;
+            """,
+            (user_id,)
+        )
+        owned_groups = cur.fetchall() or []
+
+        for row in owned_groups:
+            group_id = row[0]
+            cur.execute(
+                """
+                    SELECT 1
+                    FROM group_members
+                    WHERE group_id = %s AND user_id = %s
+                    LIMIT 1;
+                """,
+                (group_id, user_id)
+            )
+            if cur.fetchone():
+                remove_group_member(cur, user_id, group_id)
+            else:
+                reassign_or_delete_group(cur, group_id)
+
+        _delete_supabase_auth_user(user_id)
