@@ -12,6 +12,7 @@ from .schedules_service import (
     remove_schedule,
     remove_courses_from_schedule,
     get_all_schedules,
+    serialize_courses_for_response,
 )
 from app.utils.validators import validate_year_term
 
@@ -62,10 +63,11 @@ def create_schedule():
         course_identifiers, schedule_info = extract_schedule_identifiers_from_pdf(pdf)
         courses = resolve_courses_from_uiuc(schedule_info["year"], schedule_info["term"], course_identifiers)
         add_courses_by_pdf(user_id, schedule_info["year"], schedule_info["term"], courses)
+        response_courses = serialize_courses_for_response(courses)
         
         return jsonify({
             "user_id": user_id,
-            "Courses": courses,
+            "Courses": response_courses,
             "Term": schedule_info["term"],
             "Year": schedule_info["year"]
         })
@@ -126,9 +128,10 @@ def add_schedule_courses():
 
     try:
         courses = add_courses_by_crn(user_id, year, term, normalized_identifiers)
+        response_courses = serialize_courses_for_response(courses)
         return jsonify({
             "message": "Courses added successfully",
-            "courses": courses,
+            "courses": response_courses,
             "term": term,
             "year": year,
         })

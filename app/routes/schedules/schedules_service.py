@@ -1,5 +1,5 @@
 import xml.etree.ElementTree as ET
-from datetime import datetime
+from datetime import datetime, time as dt_time
 
 import requests
 from PyPDF2 import PdfReader
@@ -92,6 +92,31 @@ def _parse_time_value(raw_value):
             continue
 
     return None
+
+
+def _serialize_time_value(value):
+    if isinstance(value, dt_time):
+        return value.isoformat()
+    return value
+
+
+def serialize_courses_for_response(courses):
+    serialized_courses = []
+    for course in courses:
+        serialized_course = dict(course)
+
+        if "Start Time" in serialized_course:
+            serialized_course["Start Time"] = _serialize_time_value(serialized_course["Start Time"])
+        if "End Time" in serialized_course:
+            serialized_course["End Time"] = _serialize_time_value(serialized_course["End Time"])
+        if "start_time" in serialized_course:
+            serialized_course["start_time"] = _serialize_time_value(serialized_course["start_time"])
+        if "end_time" in serialized_course:
+            serialized_course["end_time"] = _serialize_time_value(serialized_course["end_time"])
+
+        serialized_courses.append(serialized_course)
+
+    return serialized_courses
 
 
 def _extract_time_from_element(root, tag_names, attribute_names):
@@ -569,7 +594,7 @@ def get_user_schedule(uid, year, term):
         )
         rows = cur.fetchall() or []
 
-    return [
+    return serialize_courses_for_response([
         {
             "id": row[0],
             "subject": row[1],
@@ -591,7 +616,7 @@ def get_user_schedule(uid, year, term):
             "section_created_at": row[17],
         }
         for row in rows
-    ]
+    ])
 
 
 def get_all_schedules(uid):
