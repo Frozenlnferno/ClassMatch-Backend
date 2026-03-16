@@ -308,6 +308,52 @@ def get_user_groups(uid):
     ]
 
 
+def get_group_details(uid, group_id):
+    if not uid or not group_id:
+        raise ValueError("Invalid input: uid and group_id are required")
+
+    with get_cursor() as cur:
+        cur.execute(
+            """
+                SELECT
+                    g.id,
+                    g.name,
+                    g.description,
+                    g.join_code,
+                    g.joinable,
+                    g.group_icon_url,
+                    gm.role,
+                    (
+                        SELECT COUNT(*)
+                        FROM group_members gm2
+                        WHERE gm2.group_id = g.id
+                    ) AS member_count
+                FROM groups g
+                JOIN group_members gm
+                    ON gm.group_id = g.id
+                WHERE g.id = %s
+                    AND gm.user_id = %s
+                LIMIT 1;
+            """,
+            (group_id, uid)
+        )
+        row = cur.fetchone()
+
+    if not row:
+        raise ValueError("Group not found")
+
+    return {
+        "id": row[0],
+        "name": row[1],
+        "description": row[2],
+        "join_code": row[3],
+        "joinable": row[4],
+        "group_icon_url": row[5],
+        "my_role": row[6],
+        "member_count": row[7],
+    }
+
+
 def get_group_members(group_id):
     if not group_id:
         raise ValueError("Invalid input: group_id is required")

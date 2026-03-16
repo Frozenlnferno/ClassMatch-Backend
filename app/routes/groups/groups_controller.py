@@ -7,7 +7,7 @@ from app.utils.logger import get_logger
 from werkzeug.utils import secure_filename
 
 from app.utils.supabase_admin import upload_public_file
-from .groups_service import UNSET, create_group, join_group, get_user_groups, leave_group, kick_member, get_group_members, change_group_role, change_group_info
+from .groups_service import UNSET, create_group, join_group, get_user_groups, get_group_details, leave_group, kick_member, get_group_members, change_group_role, change_group_info
 
 bp = Blueprint("groups", __name__)
 logger = get_logger(__name__)
@@ -142,6 +142,21 @@ def leave_group_route():
         logger.warning("Failed to leave group", extra={"error": str(e)})
         return jsonify({"error": str(e)}), 400
     return jsonify({"status": "Left group successfully"}), 200
+
+
+@bp.route("/<group_id>", methods=["GET"])
+@require_auth
+def get_group_details_route(group_id):
+    user_id = g.user["sub"]
+    try:
+        group = get_group_details(user_id, group_id)
+    except ValueError as e:
+        logger.warning("Failed to fetch group details", extra={"error": str(e), "group_id": group_id})
+        return jsonify({"error": str(e)}), 404
+    except Exception as e:
+        logger.exception("Error getting group details", extra={"error": str(e), "group_id": group_id})
+        return jsonify({"error": "Failed to retrieve group details"}), 500
+    return jsonify(group), 200
 
 
 @bp.route("/<group_id>", methods=["PATCH"])
