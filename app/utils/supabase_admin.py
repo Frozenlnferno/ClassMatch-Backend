@@ -12,12 +12,12 @@ def get_supabase_admin_client():
     global _supabase_admin_client
 
     if _supabase_admin_client is None:
-        if not Config.SUPABASE_URL or not Config.SUPABASE_SERVICE_ROLE_KEY:
+        if not Config.SUPABASE_URL or not Config.SUPABASE_SECRET_KEY:
             raise RuntimeError("Supabase admin client is not configured")
 
         _supabase_admin_client = create_client(
             Config.SUPABASE_URL,
-            Config.SUPABASE_SERVICE_ROLE_KEY,
+            Config.SUPABASE_SECRET_KEY,
         )
 
     return _supabase_admin_client
