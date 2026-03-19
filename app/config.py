@@ -7,6 +7,7 @@ class Config:
     FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN")
     SUPABASE_URL = os.getenv("SUPABASE_URL")
     SUPABASE_SECRET_KEY = os.getenv("SUPABASE_SECRET_KEY")
+    SUPABASE_HTTP_TIMEOUT_SECONDS = float(os.getenv("SUPABASE_HTTP_TIMEOUT_SECONDS", "20"))
     DATABASE_URL = os.getenv("DATABASE_URL")
     DB_SSLMODE = os.getenv("DB_SSLMODE", "require")  # prod default
     JWKS_URL = f"{SUPABASE_URL}/auth/v1/.well-known/jwks.json" if SUPABASE_URL else None

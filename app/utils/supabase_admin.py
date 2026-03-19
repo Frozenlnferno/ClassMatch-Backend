@@ -1,6 +1,9 @@
 from typing import Union
 
+from httpx import Client as HttpxClient
+from httpx import Timeout
 from supabase import create_client
+from supabase.lib.client_options import SyncClientOptions
 
 from app.config import Config
 
@@ -15,9 +18,15 @@ def get_supabase_admin_client():
         if not Config.SUPABASE_URL or not Config.SUPABASE_SECRET_KEY:
             raise RuntimeError("Supabase admin client is not configured")
 
+        http_client = HttpxClient(
+            timeout=Timeout(Config.SUPABASE_HTTP_TIMEOUT_SECONDS),
+            follow_redirects=True,
+            http2=True,
+        )
         _supabase_admin_client = create_client(
             Config.SUPABASE_URL,
             Config.SUPABASE_SECRET_KEY,
+            options=SyncClientOptions(httpx_client=http_client),
         )
 
     return _supabase_admin_client

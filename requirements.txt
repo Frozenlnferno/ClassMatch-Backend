@@ -33,7 +33,6 @@ hyperframe==6.1.0
 idna==3.11
 itsdangerous==2.2.0
 Jinja2==3.1.6
-jwt==1.4.0
 MarkupSafe==3.0.3
 multidict==6.7.0
 packaging==25.0
@@ -41,6 +40,7 @@ postgrest==2.22.3
 propcache==0.4.1
 proto-plus==1.26.1
 protobuf==5.29.5
+psycopg2-binary==2.9.11
 pyasn1==0.6.1
 pyasn1_modules==0.4.2
 pycparser==2.23

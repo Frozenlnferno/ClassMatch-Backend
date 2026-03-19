@@ -1,0 +1,15 @@
+# Setup a Python environment using the official Python image
+FROM python:3.12-slim
+
+# Set working directory to /app in container
+WORKDIR /app
+
+# Install Dependencies
+COPY ./requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy rest of application code into container
+COPY . .
+
+# Start the Flask application and listen on all interfaces for Docker port mapping
+CMD ["flask", "--app", "app", "run", "--debug", "--host=0.0.0.0", "--port=5000"]

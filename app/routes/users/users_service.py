@@ -1,6 +1,11 @@
-from app.routes.groups.groups_service import reassign_or_delete_group, remove_group_member
+from supabase_auth.errors import AuthRetryableError
+
 from app.utils.db import get_cursor
 from app.utils.supabase_admin import get_supabase_admin_client
+
+
+class AccountDeletionUnavailableError(RuntimeError):
+    """Raised when account deletion cannot be completed due to an upstream dependency."""
 
 
 def get_self_info(user_id):
@@ -73,10 +78,51 @@ def update_self_info(user_id, name=None, bio=None, avatar_url=None):
 
 def _delete_supabase_auth_user(user_id):
     supabase_admin = get_supabase_admin_client()
-    supabase_admin.auth.admin.delete_user(user_id)
+    try:
+        supabase_admin.auth.admin.delete_user(user_id)
+    except AuthRetryableError as exc:
+        raise AccountDeletionUnavailableError(
+            "Supabase Auth did not finish deleting the user before the timeout."
+        ) from exc
 
 
-def delete_self_account(user_id):
+def _get_next_group_owner_for_deleted_user(cur, group_id, user_id):
+    cur.execute(
+        """
+            SELECT user_id
+            FROM group_members
+            WHERE group_id = %s
+                AND user_id <> %s
+                AND role = 'admin'
+            ORDER BY joined_at ASC
+            LIMIT 1;
+        """,
+        (group_id, user_id)
+    )
+    next_owner = cur.fetchone()
+    if next_owner:
+        return next_owner[0]
+
+    cur.execute(
+        """
+            SELECT user_id
+            FROM group_members
+            WHERE group_id = %s
+                AND user_id <> %s
+                AND role = 'member'
+            ORDER BY joined_at ASC
+            LIMIT 1;
+        """,
+        (group_id, user_id)
+    )
+    next_owner = cur.fetchone()
+    if next_owner:
+        return next_owner[0]
+
+    return None
+
+
+def _prepare_owned_groups_for_account_deletion(user_id):
     with get_cursor() as cur:
         cur.execute(
             """
@@ -91,18 +137,42 @@ def delete_self_account(user_id):
 
         for row in owned_groups:
             group_id = row[0]
-            cur.execute(
-                """
-                    SELECT 1
-                    FROM group_members
-                    WHERE group_id = %s AND user_id = %s
-                    LIMIT 1;
-                """,
-                (group_id, user_id)
-            )
-            if cur.fetchone():
-                remove_group_member(cur, user_id, group_id)
+            next_owner_id = _get_next_group_owner_for_deleted_user(cur, group_id, user_id)
+            if next_owner_id:
+                cur.execute(
+                    """
+                        UPDATE group_members
+                        SET role = 'admin'
+                        WHERE group_id = %s AND user_id = %s AND role = 'owner';
+                    """,
+                    (group_id, user_id)
+                )
+                cur.execute(
+                    """
+                        UPDATE group_members
+                        SET role = 'owner'
+                        WHERE group_id = %s AND user_id = %s;
+                    """,
+                    (group_id, next_owner_id)
+                )
+                cur.execute(
+                    """
+                        UPDATE groups
+                        SET created_by = %s
+                        WHERE id = %s;
+                    """,
+                    (next_owner_id, group_id)
+                )
             else:
-                reassign_or_delete_group(cur, group_id)
+                cur.execute(
+                    """
+                        DELETE FROM groups
+                        WHERE id = %s;
+                    """,
+                    (group_id,)
+                )
 
-        _delete_supabase_auth_user(user_id)
+
+def delete_self_account(user_id):
+    _prepare_owned_groups_for_account_deletion(user_id)
+    _delete_supabase_auth_user(user_id)

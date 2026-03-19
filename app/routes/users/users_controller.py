@@ -7,7 +7,13 @@ from app.utils.logger import get_logger
 from werkzeug.utils import secure_filename
 
 from app.utils.supabase_admin import upload_public_file
-from .users_service import delete_self_account, get_self_info, get_user_info, update_self_info
+from .users_service import (
+    AccountDeletionUnavailableError,
+    delete_self_account,
+    get_self_info,
+    get_user_info,
+    update_self_info,
+)
 
 bp = Blueprint("users", __name__)
 logger = get_logger(__name__)
@@ -127,6 +133,9 @@ def delete_current_user_account():
     try:
         user_id = g.user["sub"]
         delete_self_account(user_id)
+    except AccountDeletionUnavailableError as e:
+        logger.warning("Account deletion timed out upstream", extra={"error": str(e)})
+        return jsonify({"error": "Account deletion timed out while contacting Supabase Auth. Please try again."}), 503
     except Exception as e:
         logger.exception("Error deleting self account", extra={"error": str(e)})
         return jsonify({"error": "Failed to delete account"}), 500
