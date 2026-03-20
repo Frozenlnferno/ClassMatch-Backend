@@ -1,11 +1,12 @@
-from dotenv import load_dotenv
+from pathlib import Path
 from flask import Flask, g, jsonify, request
 from time import perf_counter
 from urllib.parse import urlparse
 from uuid import uuid4
 from werkzeug.exceptions import HTTPException
+from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
 from .routes.schedules import schedules_controller
 from .routes.groups import groups_controller
@@ -30,6 +31,7 @@ def _build_cors_origins(frontend_origin):
     return sorted(origins)
 
 def create_app():
+    Config.validate()
     configure_logging()
     app = Flask(__name__)
     app.config.from_object(Config)

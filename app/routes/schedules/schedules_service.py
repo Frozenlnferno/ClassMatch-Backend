@@ -4,13 +4,14 @@ from datetime import datetime, time as dt_time
 import requests
 from PyPDF2 import PdfReader
 
+from app.routes.groups.groups_service import GROUP_NOT_FOUND_ERROR
+from app.config import Config
 from app.utils.db import get_cursor
 from app.utils.logger import get_logger
 
 from .parser import parse_schedule_pdf
 
 UIUC_EXPLORER_URL = "https://courses.illinois.edu/cisapp/explorer/schedule/{year}/{term}/{subject}/{course}/{crn}.xml"
-UIUC_API_TIMEOUT_SECONDS = 10
 logger = get_logger(__name__)
 
 
@@ -276,7 +277,7 @@ def _fetch_uiuc_course(year, term, identifier):
     )
 
     try:
-        response = requests.get(url, timeout=UIUC_API_TIMEOUT_SECONDS)
+        response = requests.get(url, timeout=Config.UIUC_API_TIMEOUT_SECONDS)
     except requests.RequestException as exc:
         raise ValueError(
             f"Failed to reach the UIUC course API for {subject} {course_number} CRN {crn}: {exc}"
@@ -650,6 +651,7 @@ def get_all_schedules(uid):
 
 def get_matching_classmates(uid, year, term, group_id):
     with get_cursor() as cur:
+        _assert_group_member(cur, uid, group_id)
         cur.execute(
             """
                 WITH me AS (
@@ -716,7 +718,7 @@ def _assert_group_member(cur, uid, group_id):
         (group_id, uid)
     )
     if not cur.fetchone():
-        raise PermissionError("User is not a member of the group")
+        raise PermissionError(GROUP_NOT_FOUND_ERROR)
 
 
 def get_past_classmates(uid, year, term, group_id):

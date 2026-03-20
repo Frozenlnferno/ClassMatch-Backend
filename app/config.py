@@ -1,13 +1,75 @@
 import os
+from pathlib import Path
+from urllib.parse import urlparse
+
 from dotenv import load_dotenv
 
-load_dotenv()
+BACKEND_DIR = Path(__file__).resolve().parents[1]
+load_dotenv(BACKEND_DIR / ".env")
+
+
+def _get_bool_env(name: str, default: bool = False) -> bool:
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+    return raw_value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _validate_http_url(name: str, value: str | None):
+    if not value:
+        raise RuntimeError(f"Missing required environment variable: {name}")
+    parsed = urlparse(value)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise RuntimeError(f"Invalid URL configured for {name}")
+
+
+def _validate_database_url(name: str, value: str | None):
+    if not value:
+        raise RuntimeError(f"Missing required environment variable: {name}")
+    parsed = urlparse(value)
+    if parsed.scheme not in {"postgresql", "postgres"} or not parsed.hostname:
+        raise RuntimeError(f"Invalid database URL configured for {name}")
+
+
+def _validate_positive_number(name: str, value, integer_only: bool = False):
+    if value is None or value <= 0:
+        raise RuntimeError(f"{name} must be greater than zero")
+    if integer_only and int(value) != value:
+        raise RuntimeError(f"{name} must be an integer")
+
 
 class Config:
     FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN")
     SUPABASE_URL = os.getenv("SUPABASE_URL")
     SUPABASE_SECRET_KEY = os.getenv("SUPABASE_SECRET_KEY")
+    SUPABASE_JWT_ISSUER = os.getenv("SUPABASE_JWT_ISSUER") or (
+        f"{SUPABASE_URL.rstrip('/')}/auth/v1" if SUPABASE_URL else None
+    )
+    SUPABASE_JWT_AUDIENCE = os.getenv("SUPABASE_JWT_AUDIENCE", "authenticated")
     SUPABASE_HTTP_TIMEOUT_SECONDS = float(os.getenv("SUPABASE_HTTP_TIMEOUT_SECONDS", "20"))
+    UIUC_API_TIMEOUT_SECONDS = float(os.getenv("UIUC_API_TIMEOUT_SECONDS", "10"))
+    MAX_IMAGE_UPLOAD_BYTES = int(os.getenv("MAX_IMAGE_UPLOAD_BYTES", str(5 * 1024 * 1024)))
+    MAX_PDF_UPLOAD_BYTES = int(os.getenv("MAX_PDF_UPLOAD_BYTES", str(10 * 1024 * 1024)))
+    MAX_MANUAL_COURSES_PER_REQUEST = int(os.getenv("MAX_MANUAL_COURSES_PER_REQUEST", "25"))
     DATABASE_URL = os.getenv("DATABASE_URL")
     DB_SSLMODE = os.getenv("DB_SSLMODE", "require")  # prod default
-    JWKS_URL = f"{SUPABASE_URL}/auth/v1/.well-known/jwks.json" if SUPABASE_URL else None
+    LOG_OPTIONS_REQUESTS = _get_bool_env("LOG_OPTIONS_REQUESTS", False)
+    JWKS_URL = f"{SUPABASE_URL.rstrip('/')}/auth/v1/.well-known/jwks.json" if SUPABASE_URL else None
+
+    @classmethod
+    def validate(cls):
+        _validate_http_url("FRONTEND_ORIGIN", cls.FRONTEND_ORIGIN)
+        _validate_http_url("SUPABASE_URL", cls.SUPABASE_URL)
+        _validate_http_url("SUPABASE_JWT_ISSUER", cls.SUPABASE_JWT_ISSUER)
+        _validate_database_url("DATABASE_URL", cls.DATABASE_URL)
+
+        if not cls.SUPABASE_SECRET_KEY:
+            raise RuntimeError("Missing required environment variable: SUPABASE_SECRET_KEY")
+        if not cls.SUPABASE_JWT_AUDIENCE:
+            raise RuntimeError("Missing required environment variable: SUPABASE_JWT_AUDIENCE")
+
+        _validate_positive_number("SUPABASE_HTTP_TIMEOUT_SECONDS", cls.SUPABASE_HTTP_TIMEOUT_SECONDS)
+        _validate_positive_number("UIUC_API_TIMEOUT_SECONDS", cls.UIUC_API_TIMEOUT_SECONDS)
+        _validate_positive_number("MAX_IMAGE_UPLOAD_BYTES", cls.MAX_IMAGE_UPLOAD_BYTES, integer_only=True)
+        _validate_positive_number("MAX_PDF_UPLOAD_BYTES", cls.MAX_PDF_UPLOAD_BYTES, integer_only=True)
+        _validate_positive_number("MAX_MANUAL_COURSES_PER_REQUEST", cls.MAX_MANUAL_COURSES_PER_REQUEST, integer_only=True)

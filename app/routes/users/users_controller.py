@@ -1,7 +1,8 @@
-import os
+import math
 from uuid import uuid4
 
 from flask import Blueprint, request, jsonify, g
+from app.config import Config
 from app.utils.auth import require_auth
 from app.utils.logger import get_logger
 from werkzeug.utils import secure_filename
@@ -17,7 +18,6 @@ from .users_service import (
 
 bp = Blueprint("users", __name__)
 logger = get_logger(__name__)
-MAX_IMAGE_SIZE_BYTES = 5 * 1024 * 1024
 ALLOWED_IMAGE_MIME_TYPES = {
     "image/gif": "gif",
     "image/jpeg": "jpg",
@@ -40,14 +40,10 @@ def _get_image_upload(*field_names):
         if uploaded_file and uploaded_file.filename:
             return uploaded_file
     raise ValueError("No image file uploaded")
-
-
-def _get_upload_size(uploaded_file):
-    current_position = uploaded_file.stream.tell()
-    uploaded_file.stream.seek(0, os.SEEK_END)
-    size = uploaded_file.stream.tell()
-    uploaded_file.stream.seek(current_position)
-    return size
+def _format_size_limit(max_bytes):
+    if max_bytes < 1024 * 1024:
+        return f"{max_bytes} bytes"
+    return f"{math.ceil(max_bytes / (1024 * 1024))} MB"
 
 
 def _normalize_image_type(uploaded_file):
@@ -66,17 +62,14 @@ def _normalize_image_type(uploaded_file):
 
 def _read_validated_image(*field_names):
     uploaded_file = _get_image_upload(*field_names)
-    size = _get_upload_size(uploaded_file)
-    if size <= 0:
-        raise ValueError("Image file is empty")
-    if size >= MAX_IMAGE_SIZE_BYTES:
-        raise ValueError("Image file must be smaller than 5 MB")
-
+    max_image_size_bytes = Config.MAX_IMAGE_UPLOAD_BYTES
     content_type, extension = _normalize_image_type(uploaded_file)
     uploaded_file.stream.seek(0)
-    file_bytes = uploaded_file.read()
+    file_bytes = uploaded_file.read(max_image_size_bytes + 1)
     if not file_bytes:
         raise ValueError("Image file is empty")
+    if len(file_bytes) > max_image_size_bytes:
+        raise ValueError(f"Image file must be smaller than {_format_size_limit(max_image_size_bytes)}")
     return file_bytes, content_type, extension
 
 @bp.route("/me", methods=["GET"])

@@ -5,6 +5,7 @@ from app.utils.db import get_cursor
 
 ALPHABET = string.ascii_uppercase  # A-Z
 UNSET = object()
+GROUP_NOT_FOUND_ERROR = "Group not found"
 
 
 def generate_join_code(length=10):
@@ -177,8 +178,14 @@ def join_group(uid, join_code):
         )
         result = cur.fetchone()
         if not result:
-            return -1
-    return group_id
+            return {
+                "group_id": group_id,
+                "already_member": True,
+            }
+    return {
+        "group_id": group_id,
+        "already_member": False,
+    }
 
 
 def leave_group(uid, group_id):
@@ -238,9 +245,9 @@ def kick_member(admin_uid, member_uid, group_id):
         cur.execute(
             """
                 SELECT role FROM group_members
-                WHERE group_id = %s AND (user_id = %s OR user_id = %s);
+                WHERE group_id = %s AND user_id = %s;
             """,
-            (group_id, admin_uid, member_uid)
+            (group_id, admin_uid)
         )
         admin_data = cur.fetchone()
         if not admin_data or (admin_data[0] != 'admin' and admin_data[0] != 'owner'):
@@ -354,11 +361,26 @@ def get_group_details(uid, group_id):
     }
 
 
-def get_group_members(group_id):
-    if not group_id:
-        raise ValueError("Invalid input: group_id is required")
+def _assert_group_member(cur, uid, group_id):
+    cur.execute(
+        """
+            SELECT 1
+            FROM group_members
+            WHERE group_id = %s AND user_id = %s
+            LIMIT 1;
+        """,
+        (group_id, uid)
+    )
+    if not cur.fetchone():
+        raise PermissionError(GROUP_NOT_FOUND_ERROR)
+
+
+def get_group_members(requester_uid, group_id):
+    if not requester_uid or not group_id:
+        raise ValueError("Invalid input: requester_uid and group_id are required")
 
     with get_cursor() as cur:
+        _assert_group_member(cur, requester_uid, group_id)
         cur.execute(
             """
                 SELECT u.id, u.name, gm.role, gm.joined_at, u.avatar_url
@@ -387,7 +409,7 @@ def change_group_role(admin_uid, member_uid, group_id, new_role):
     if not admin_uid or not member_uid or not group_id or not new_role:
         raise ValueError("Invalid input: admin_uid, member_uid, group_id, and new_role are required")
 
-    valid_roles = ['member', 'admin', 'owner']
+    valid_roles = ['member', 'admin']
     if new_role not in valid_roles:
         raise ValueError("Invalid role specified")
 

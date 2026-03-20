@@ -1,4 +1,8 @@
+import io
+import math
+
 from flask import request, jsonify, g, Blueprint
+from app.config import Config
 from app.utils.auth import require_auth
 from app.utils.logger import get_logger
 from .schedules_service import (
@@ -18,6 +22,10 @@ from app.utils.validators import validate_year_term
 
 bp = Blueprint("schedules", __name__)
 logger = get_logger(__name__)
+def _format_size_limit(max_bytes):
+    if max_bytes < 1024 * 1024:
+        return f"{max_bytes} bytes"
+    return f"{math.ceil(max_bytes / (1024 * 1024))} MB"
 
 @bp.route("/", methods=["GET"])
 @require_auth
@@ -59,8 +67,18 @@ def create_schedule():
     if not pdf.filename or not pdf.filename.lower().endswith('.pdf'):
         return jsonify({"error": "File must be a PDF"}), 400
 
+    pdf.stream.seek(0)
+    max_pdf_size_bytes = Config.MAX_PDF_UPLOAD_BYTES
+    pdf_bytes = pdf.read(max_pdf_size_bytes + 1)
+    if not pdf_bytes:
+        return jsonify({"error": "PDF file appears to be empty"}), 400
+    if len(pdf_bytes) > max_pdf_size_bytes:
+        return jsonify({"error": f"PDF file must be smaller than {_format_size_limit(max_pdf_size_bytes)}"}), 400
+
     try:
-        course_identifiers, schedule_info = extract_schedule_identifiers_from_pdf(pdf)
+        pdf_buffer = io.BytesIO(pdf_bytes)
+        pdf_buffer.name = pdf.filename
+        course_identifiers, schedule_info = extract_schedule_identifiers_from_pdf(pdf_buffer)
         courses = resolve_courses_from_uiuc(schedule_info["year"], schedule_info["term"], course_identifiers)
         add_courses_by_pdf(user_id, schedule_info["year"], schedule_info["term"], courses)
         response_courses = serialize_courses_for_response(courses)
@@ -92,6 +110,8 @@ def add_schedule_courses():
     raw_courses = data.get("courses", [])
     if not isinstance(raw_courses, list):
         return jsonify({"error": "Invalid courses payload"}), 400
+    if len(raw_courses) > Config.MAX_MANUAL_COURSES_PER_REQUEST:
+        return jsonify({"error": f"You can add at most {Config.MAX_MANUAL_COURSES_PER_REQUEST} courses at a time"}), 400
 
     normalized_identifiers = []
     seen = set()
@@ -195,6 +215,9 @@ def get_matching_classmates_route():
     try:
         matches = get_matching_classmates(user_id, year, term, group_id)
         return jsonify(matches)
+    except PermissionError:
+        logger.warning("Matching classmates lookup denied", extra={"group_id": group_id, "error": "Group not found"})
+        return jsonify({"error": "Group not found"}), 404
     except Exception as e:
         logger.exception("Error getting matching classmates", extra={"error": str(e)})
         return jsonify({"error": "Internal server error"}), 500
@@ -217,8 +240,8 @@ def get_past_classmates_route():
         matches = get_past_classmates(user_id, year, term, group_id)
         return jsonify(matches)
     except PermissionError as e:
-        logger.warning("Permission denied getting past classmates", extra={"error": str(e)})
-        return jsonify({"error": str(e)}), 403
+        logger.warning("Past classmates lookup denied", extra={"error": str(e), "group_id": group_id})
+        return jsonify({"error": "Group not found"}), 404
     except Exception as e:
         logger.exception("Error getting past classmates", extra={"error": str(e)})
         return jsonify({"error": "Internal server error"}), 500

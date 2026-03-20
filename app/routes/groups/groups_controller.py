@@ -1,17 +1,29 @@
-import os
+import math
 from uuid import uuid4
 
 from flask import request, jsonify, g, Blueprint
+from app.config import Config
 from app.utils.auth import require_auth
 from app.utils.logger import get_logger
 from werkzeug.utils import secure_filename
 
 from app.utils.supabase_admin import upload_public_file
-from .groups_service import UNSET, create_group, join_group, get_user_groups, get_group_details, leave_group, kick_member, get_group_members, change_group_role, change_group_info
+from .groups_service import (
+    GROUP_NOT_FOUND_ERROR,
+    UNSET,
+    change_group_info,
+    change_group_role,
+    create_group,
+    get_group_details,
+    get_group_members,
+    get_user_groups,
+    join_group,
+    kick_member,
+    leave_group,
+)
 
 bp = Blueprint("groups", __name__)
 logger = get_logger(__name__)
-MAX_IMAGE_SIZE_BYTES = 5 * 1024 * 1024
 ALLOWED_IMAGE_MIME_TYPES = {
     "image/gif": "gif",
     "image/jpeg": "jpg",
@@ -34,14 +46,10 @@ def _get_image_upload(*field_names):
         if uploaded_file and uploaded_file.filename:
             return uploaded_file
     raise ValueError("No image file uploaded")
-
-
-def _get_upload_size(uploaded_file):
-    current_position = uploaded_file.stream.tell()
-    uploaded_file.stream.seek(0, os.SEEK_END)
-    size = uploaded_file.stream.tell()
-    uploaded_file.stream.seek(current_position)
-    return size
+def _format_size_limit(max_bytes):
+    if max_bytes < 1024 * 1024:
+        return f"{max_bytes} bytes"
+    return f"{math.ceil(max_bytes / (1024 * 1024))} MB"
 
 
 def _normalize_image_type(uploaded_file):
@@ -60,17 +68,14 @@ def _normalize_image_type(uploaded_file):
 
 def _read_validated_image(*field_names):
     uploaded_file = _get_image_upload(*field_names)
-    size = _get_upload_size(uploaded_file)
-    if size <= 0:
-        raise ValueError("Image file is empty")
-    if size >= MAX_IMAGE_SIZE_BYTES:
-        raise ValueError("Image file must be smaller than 5 MB")
-
+    max_image_size_bytes = Config.MAX_IMAGE_UPLOAD_BYTES
     content_type, extension = _normalize_image_type(uploaded_file)
     uploaded_file.stream.seek(0)
-    file_bytes = uploaded_file.read()
+    file_bytes = uploaded_file.read(max_image_size_bytes + 1)
     if not file_bytes:
         raise ValueError("Image file is empty")
+    if len(file_bytes) > max_image_size_bytes:
+        raise ValueError(f"Image file must be smaller than {_format_size_limit(max_image_size_bytes)}")
     return file_bytes, content_type, extension
 
 @bp.route("/", methods=["GET"])
@@ -119,13 +124,15 @@ def join_group_route():
     join_code = request.args.get("join_code")
 
     try:
-        status = join_group(user_id, join_code)
-        if not status:
-            return jsonify({"status": "User is already a member"}), 200
+        result = join_group(user_id, join_code)
     except Exception as e:
         logger.warning("Failed to join group", extra={"error": str(e)})
         return jsonify({"error": str(e)}), 400
-    return jsonify({"status": "Group joined successfully"}), 200
+    return jsonify({
+        "status": "User is already a member" if result["already_member"] else "Group joined successfully",
+        "group_id": result["group_id"],
+        "already_member": result["already_member"],
+    }), 200
 
 
 @bp.route("/leave", methods=["POST"])
@@ -186,8 +193,12 @@ def update_group_info(group_id):
 @require_auth
 def get_members_route(group_id):
     # Get all members in a group
+    user_id = g.user["sub"]
     try:
-        members = get_group_members(group_id)
+        members = get_group_members(user_id, group_id)
+    except PermissionError:
+        logger.warning("Group members lookup denied", extra={"group_id": group_id, "error": GROUP_NOT_FOUND_ERROR})
+        return jsonify({"error": GROUP_NOT_FOUND_ERROR}), 404
     except Exception as e:
         logger.warning("Failed to fetch group members", extra={"error": str(e)})
         return jsonify({"error": str(e)}), 400
@@ -241,16 +252,15 @@ def join_group_by_url_route(join_code):
     user_id = g.user["sub"]
 
     try:
-        group_id = join_group(user_id, join_code)
-        if group_id == -1:
-            return jsonify({"status": "User is already a member"}), 200
+        result = join_group(user_id, join_code)
     except Exception as e:
         logger.warning("Failed to join group by URL", extra={"error": str(e)})
         return jsonify({"error": str(e)}), 400
     return jsonify({
-        "status": "Group joined successfully",
-        "group_id": group_id
-        }), 200
+        "status": "User is already a member" if result["already_member"] else "Group joined successfully",
+        "group_id": result["group_id"],
+        "already_member": result["already_member"],
+    }), 200
 
 
 @bp.route("/<group_id>/icon", methods=["POST"])

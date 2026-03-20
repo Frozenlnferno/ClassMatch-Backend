@@ -31,8 +31,9 @@ def verify_supabase_jwt(token: str):
         token,
         signing_key,
         algorithms=["ES256"],
-        audience="authenticated",
-        options={"require": ["exp", "iat", "sub"]},
+        audience=Config.SUPABASE_JWT_AUDIENCE,
+        issuer=Config.SUPABASE_JWT_ISSUER,
+        options={"require": ["exp", "iat", "sub", "aud", "iss"]},
         leeway=5,
     )
     return decoded
