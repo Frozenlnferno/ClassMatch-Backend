@@ -63,16 +63,28 @@ class BackendRouteTestCase(unittest.TestCase):
             DATABASE_URL="postgresql://postgres:postgres@localhost:5432/postgres",
             DB_SSLMODE="disable",
             LOG_OPTIONS_REQUESTS=False,
+            SUPABASE_SCHEDULE_PDF_BUCKET="schedule-pdfs",
+            SUPABASE_SCHEDULE_PDF_PREFIX="schedule-imports",
+            REDIS_URL="redis://localhost:6379/0",
+            REDIS_JOB_LEASE_SECONDS=60,
+            REDIS_JOB_HEARTBEAT_SECONDS=20,
+            REDIS_JOB_MAX_ATTEMPTS=3,
+            REDIS_JOB_RETRY_BASE_DELAY_SECONDS=5,
+            REDIS_JOB_RESULT_TTL_SECONDS=86400,
+            REDIS_JOB_POLL_INTERVAL_SECONDS=0.01,
             JWKS_URL="http://127.0.0.1:54321/auth/v1/.well-known/jwks.json",
         )
         self.config_patcher.start()
         self.init_db_pool_patcher = patch("app.init_db_pool", return_value=None)
+        self.init_redis_patcher = patch("app.init_redis", return_value=None)
         self.init_db_pool_patcher.start()
+        self.init_redis_patcher.start()
         self.app = create_app()
         self.app.testing = True
         self.client = self.app.test_client()
 
     def tearDown(self):
+        self.init_redis_patcher.stop()
         self.init_db_pool_patcher.stop()
         self.config_patcher.stop()
 
@@ -152,6 +164,52 @@ class BackendRouteTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn("at most", response.get_json()["error"])
 
+    def test_schedule_upload_returns_async_job(self):
+        with patch(
+            "app.routes.schedules.schedules_controller.create_pdf_import_job",
+            return_value={"job_id": "job-1", "job_type": "pdf_schedule_import", "status": "queued"},
+        ):
+            response = self.client.post(
+                "/api/schedules/",
+                data={"pdf": (io.BytesIO(b"x" * 16), "schedule.pdf")},
+                headers=self._auth_header(),
+                content_type="multipart/form-data",
+            )
+
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.get_json()["job_id"], "job-1")
+
+    def test_manual_course_add_returns_async_job(self):
+        with patch(
+            "app.routes.schedules.schedules_controller.create_crn_import_job",
+            return_value={"job_id": "job-2", "job_type": "crn_schedule_import", "status": "queued"},
+        ):
+            response = self.client.post(
+                "/api/schedules/courses?term=fall&year=2026",
+                json={"courses": [{"subject": "CS", "course": "101", "crn": "12345"}]},
+                headers=self._auth_header(),
+            )
+
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.get_json()["job_id"], "job-2")
+
+    def test_schedule_job_status_route_returns_404_for_other_user(self):
+        with patch("app.routes.schedules.schedules_controller.get_job_status_for_user", return_value=None):
+            response = self.client.get("/api/schedules/jobs/job-404", headers=self._auth_header())
+
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.get_json()["error"], "Job not found")
+
+    def test_schedule_job_status_route_returns_job_payload(self):
+        with patch(
+            "app.routes.schedules.schedules_controller.get_job_status_for_user",
+            return_value={"job_id": "job-3", "status": "processing", "job_type": "crn_schedule_import"},
+        ):
+            response = self.client.get("/api/schedules/jobs/job-3", headers=self._auth_header())
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["status"], "processing")
+
 
 class BackendServiceTestCase(unittest.TestCase):
     def test_kick_member_checks_requester_and_target_separately(self):
@@ -229,6 +287,15 @@ class BackendConfigValidationTestCase(unittest.TestCase):
             DATABASE_URL="postgresql://postgres:postgres@localhost:5432/postgres",
             DB_SSLMODE="disable",
             LOG_OPTIONS_REQUESTS=False,
+            SUPABASE_SCHEDULE_PDF_BUCKET="schedule-pdfs",
+            SUPABASE_SCHEDULE_PDF_PREFIX="schedule-imports",
+            REDIS_URL="redis://localhost:6379/0",
+            REDIS_JOB_LEASE_SECONDS=60,
+            REDIS_JOB_HEARTBEAT_SECONDS=20,
+            REDIS_JOB_MAX_ATTEMPTS=3,
+            REDIS_JOB_RETRY_BASE_DELAY_SECONDS=5,
+            REDIS_JOB_RESULT_TTL_SECONDS=86400,
+            REDIS_JOB_POLL_INTERVAL_SECONDS=0.01,
             JWKS_URL="http://127.0.0.1:54321/auth/v1/.well-known/jwks.json",
         ):
             with self.assertRaises(RuntimeError):

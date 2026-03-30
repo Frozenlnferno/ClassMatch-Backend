@@ -59,3 +59,47 @@ def upload_public_file(
     if not public_url:
         raise RuntimeError("Failed to generate public URL for uploaded file")
     return public_url
+
+
+def upload_private_file(
+    object_path: str,
+    file_data: Union[bytes, bytearray],
+    content_type: str,
+    bucket_name: str,
+) -> None:
+    if not object_path:
+        raise ValueError("object_path is required")
+    if not file_data:
+        raise ValueError("file_data is required")
+    if not content_type:
+        raise ValueError("content_type is required")
+    if not bucket_name:
+        raise ValueError("bucket_name is required")
+
+    bucket = get_supabase_admin_client().storage.from_(bucket_name)
+    bucket.upload(
+        object_path,
+        bytes(file_data),
+        file_options={
+            "content-type": content_type,
+            "cache-control": "3600",
+            "upsert": "true",
+        },
+    )
+
+
+def download_private_file(object_path: str, bucket_name: str) -> bytes:
+    if not object_path:
+        raise ValueError("object_path is required")
+    if not bucket_name:
+        raise ValueError("bucket_name is required")
+
+    bucket = get_supabase_admin_client().storage.from_(bucket_name)
+    return bucket.download(object_path)
+
+
+def delete_file(object_path: str, bucket_name: str) -> None:
+    if not object_path or not bucket_name:
+        return
+    bucket = get_supabase_admin_client().storage.from_(bucket_name)
+    bucket.remove([object_path])

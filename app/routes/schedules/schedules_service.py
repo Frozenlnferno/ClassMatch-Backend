@@ -342,7 +342,7 @@ def resolve_courses_from_uiuc(year, term, course_identifiers):
     return [_fetch_uiuc_course(year, term, identifier) for identifier in course_identifiers]
 
 
-def add_courses_by_pdf(uid, year, term, courses):
+def _persist_schedule_courses(uid, year, term, courses, replace_existing):
     with get_cursor() as cur:
         cur.execute(
             """
@@ -355,103 +355,14 @@ def add_courses_by_pdf(uid, year, term, courses):
         )
         schedule_id = cur.fetchone()[0]
 
-        cur.execute(
-            """
-                DELETE FROM schedule_sections
-                WHERE schedule_id = %s
-            """,
-            (schedule_id,)
-        )
-
-        for course in courses:
+        if replace_existing:
             cur.execute(
                 """
-                    INSERT INTO classes (subject, number, title)
-                    VALUES (%s, %s, %s)
-                    ON CONFLICT (subject, number) DO UPDATE
-                    SET title = EXCLUDED.title
-                    RETURNING id
+                    DELETE FROM schedule_sections
+                    WHERE schedule_id = %s
                 """,
-                (
-                    course["Subject"],
-                    course["Subject Number"],
-                    course["Title"],
-                )
+                (schedule_id,)
             )
-            class_id = cur.fetchone()[0]
-
-            cur.execute(
-                """
-                    INSERT INTO sections (
-                        class_id,
-                        year,
-                        term,
-                        section,
-                        crn,
-                        course_type,
-                        instructor,
-                        building,
-                        room_number,
-                        start_time,
-                        end_time,
-                        days_of_week
-                    )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (year, term, crn) DO UPDATE
-                    SET class_id = EXCLUDED.class_id,
-                        section = EXCLUDED.section,
-                        course_type = EXCLUDED.course_type,
-                        instructor = EXCLUDED.instructor,
-                        building = EXCLUDED.building,
-                        room_number = EXCLUDED.room_number,
-                        start_time = EXCLUDED.start_time,
-                        end_time = EXCLUDED.end_time,
-                        days_of_week = EXCLUDED.days_of_week
-                    RETURNING id
-                """,
-                (
-                    class_id,
-                    year,
-                    term,
-                    course["Section"],
-                    course["CRN"],
-                    course["Course Type"],
-                    course["Instructor"],
-                    course["Building"],
-                    course["Room Number"],
-                    course["Start Time"],
-                    course["End Time"],
-                    course["Days of Week"],
-                )
-            )
-            section_id = cur.fetchone()[0]
-
-            cur.execute(
-                """
-                    INSERT INTO schedule_sections (schedule_id, section_id)
-                    VALUES (%s, %s)
-                """,
-                (schedule_id, section_id)
-            )
-
-
-def add_courses_by_crn(uid, year, term, course_identifiers):
-    if not course_identifiers:
-        raise ValueError("No courses were provided.")
-
-    courses = resolve_courses_from_uiuc(year, term, course_identifiers)
-
-    with get_cursor() as cur:
-        cur.execute(
-            """
-                INSERT INTO schedules (user_id, year, term)
-                VALUES (%s, %s, %s)
-                ON CONFLICT (user_id, term, year) DO UPDATE SET year=EXCLUDED.year
-                RETURNING id
-            """,
-            (uid, year, term)
-        )
-        schedule_id = cur.fetchone()[0]
 
         for course in courses:
             cur.execute(
@@ -525,6 +436,21 @@ def add_courses_by_crn(uid, year, term, course_identifiers):
                 (schedule_id, section_id)
             )
 
+
+def add_courses_by_pdf(uid, year, term, courses):
+    _persist_schedule_courses(uid, year, term, courses, replace_existing=True)
+
+
+def add_courses_by_crn(uid, year, term, course_identifiers):
+    if not course_identifiers:
+        raise ValueError("No courses were provided.")
+
+    courses = resolve_courses_from_uiuc(year, term, course_identifiers)
+    _persist_schedule_courses(uid, year, term, courses, replace_existing=False)
+    return courses
+
+def add_resolved_courses_by_crn(uid, year, term, courses):
+    _persist_schedule_courses(uid, year, term, courses, replace_existing=False)
     return courses
 
 

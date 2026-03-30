@@ -1,22 +1,17 @@
-import io
 import math
 
 from flask import request, jsonify, g, Blueprint
 from app.config import Config
+from app.jobs import create_crn_import_job, create_pdf_import_job, get_job_status_for_user
 from app.utils.auth import require_auth
 from app.utils.logger import get_logger
 from .schedules_service import (
-    extract_schedule_identifiers_from_pdf,
-    resolve_courses_from_uiuc,
-    add_courses_by_pdf,
-    add_courses_by_crn,
     get_user_schedule,
     get_matching_classmates,
     get_past_classmates,
     remove_schedule,
     remove_courses_from_schedule,
     get_all_schedules,
-    serialize_courses_for_response,
 )
 from app.utils.validators import validate_year_term
 
@@ -76,20 +71,13 @@ def create_schedule():
         return jsonify({"error": f"PDF file must be smaller than {_format_size_limit(max_pdf_size_bytes)}"}), 400
 
     try:
-        pdf_buffer = io.BytesIO(pdf_bytes)
-        pdf_buffer.name = pdf.filename
-        course_identifiers, schedule_info = extract_schedule_identifiers_from_pdf(pdf_buffer)
-        courses = resolve_courses_from_uiuc(schedule_info["year"], schedule_info["term"], course_identifiers)
-        add_courses_by_pdf(user_id, schedule_info["year"], schedule_info["term"], courses)
-        response_courses = serialize_courses_for_response(courses)
-        
-        return jsonify({
-            "user_id": user_id,
-            "Courses": response_courses,
-            "Term": schedule_info["term"],
-            "Year": schedule_info["year"]
-        })
-
+        job = create_pdf_import_job(
+            user_id=user_id,
+            pdf_bytes=pdf_bytes,
+            filename=pdf.filename,
+            content_type=(pdf.content_type or "application/pdf").split(";", 1)[0].strip() or "application/pdf",
+        )
+        return jsonify(job), 202
     except ValueError as e:
         logger.warning("Schedule upload validation error", extra={"error": str(e)})
         return jsonify({"error": str(e)}), 400
@@ -147,20 +135,24 @@ def add_schedule_courses():
         return jsonify({"error": "No courses were provided"}), 400
 
     try:
-        courses = add_courses_by_crn(user_id, year, term, normalized_identifiers)
-        response_courses = serialize_courses_for_response(courses)
-        return jsonify({
-            "message": "Courses added successfully",
-            "courses": response_courses,
-            "term": term,
-            "year": year,
-        })
+        job = create_crn_import_job(user_id, year, term, normalized_identifiers)
+        return jsonify(job), 202
     except ValueError as e:
         logger.warning("Course add validation error", extra={"error": str(e)})
         return jsonify({"error": str(e)}), 400
     except Exception as e:
         logger.exception("Error adding courses", extra={"error": str(e)})
         return jsonify({"error": "Failed to add courses"}), 500
+
+
+@bp.route("/jobs/<job_id>", methods=["GET"])
+@require_auth
+def get_schedule_job(job_id):
+    user_id = g.user["sub"]
+    job = get_job_status_for_user(job_id, user_id)
+    if not job:
+        return jsonify({"error": "Job not found"}), 404
+    return jsonify(job)
 
 @bp.route("/", methods=["DELETE"])
 @require_auth

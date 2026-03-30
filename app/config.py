@@ -1,4 +1,5 @@
 import os
+import posixpath
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -38,6 +39,14 @@ def _validate_positive_number(name: str, value, integer_only: bool = False):
         raise RuntimeError(f"{name} must be an integer")
 
 
+def _validate_redis_url(name: str, value: str | None):
+    if not value:
+        raise RuntimeError(f"Missing required environment variable: {name}")
+    parsed = urlparse(value)
+    if parsed.scheme not in {"redis", "rediss"} or not parsed.hostname:
+        raise RuntimeError(f"Invalid Redis URL configured for {name}")
+
+
 class Config:
     FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN")
     SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -47,6 +56,8 @@ class Config:
     )
     SUPABASE_JWT_AUDIENCE = os.getenv("SUPABASE_JWT_AUDIENCE", "authenticated")
     SUPABASE_HTTP_TIMEOUT_SECONDS = float(os.getenv("SUPABASE_HTTP_TIMEOUT_SECONDS", "20"))
+    SUPABASE_SCHEDULE_PDF_BUCKET = os.getenv("SUPABASE_SCHEDULE_PDF_BUCKET", "schedule-pdfs")
+    SUPABASE_SCHEDULE_PDF_PREFIX = os.getenv("SUPABASE_SCHEDULE_PDF_PREFIX", "schedule-imports")
     UIUC_API_TIMEOUT_SECONDS = float(os.getenv("UIUC_API_TIMEOUT_SECONDS", "10"))
     MAX_IMAGE_UPLOAD_BYTES = int(os.getenv("MAX_IMAGE_UPLOAD_BYTES", str(5 * 1024 * 1024)))
     MAX_PDF_UPLOAD_BYTES = int(os.getenv("MAX_PDF_UPLOAD_BYTES", str(10 * 1024 * 1024)))
@@ -54,7 +65,23 @@ class Config:
     DATABASE_URL = os.getenv("DATABASE_URL")
     DB_SSLMODE = os.getenv("DB_SSLMODE", "require")  # prod default
     LOG_OPTIONS_REQUESTS = _get_bool_env("LOG_OPTIONS_REQUESTS", False)
+    REDIS_URL = os.getenv("REDIS_URL")
+    REDIS_JOB_LEASE_SECONDS = int(os.getenv("REDIS_JOB_LEASE_SECONDS", "60"))
+    REDIS_JOB_HEARTBEAT_SECONDS = int(os.getenv("REDIS_JOB_HEARTBEAT_SECONDS", "20"))
+    REDIS_JOB_MAX_ATTEMPTS = int(os.getenv("REDIS_JOB_MAX_ATTEMPTS", "3"))
+    REDIS_JOB_RETRY_BASE_DELAY_SECONDS = int(os.getenv("REDIS_JOB_RETRY_BASE_DELAY_SECONDS", "5"))
+    REDIS_JOB_RESULT_TTL_SECONDS = int(os.getenv("REDIS_JOB_RESULT_TTL_SECONDS", str(24 * 60 * 60)))
+    REDIS_JOB_POLL_INTERVAL_SECONDS = float(os.getenv("REDIS_JOB_POLL_INTERVAL_SECONDS", "1"))
     JWKS_URL = f"{SUPABASE_URL.rstrip('/')}/auth/v1/.well-known/jwks.json" if SUPABASE_URL else None
+
+    @classmethod
+    def build_schedule_pdf_object_path(cls, user_id: str, filename: str, job_id: str) -> str:
+        safe_filename = Path(filename or "schedule.pdf").name or "schedule.pdf"
+        return posixpath.join(
+            cls.SUPABASE_SCHEDULE_PDF_PREFIX.strip("/"),
+            user_id,
+            f"{job_id}-{safe_filename}",
+        )
 
     @classmethod
     def validate(cls):
@@ -62,14 +89,24 @@ class Config:
         _validate_http_url("SUPABASE_URL", cls.SUPABASE_URL)
         _validate_http_url("SUPABASE_JWT_ISSUER", cls.SUPABASE_JWT_ISSUER)
         _validate_database_url("DATABASE_URL", cls.DATABASE_URL)
+        _validate_redis_url("REDIS_URL", cls.REDIS_URL)
 
         if not cls.SUPABASE_SECRET_KEY:
             raise RuntimeError("Missing required environment variable: SUPABASE_SECRET_KEY")
         if not cls.SUPABASE_JWT_AUDIENCE:
             raise RuntimeError("Missing required environment variable: SUPABASE_JWT_AUDIENCE")
+        if not cls.SUPABASE_SCHEDULE_PDF_BUCKET:
+            raise RuntimeError("Missing required environment variable: SUPABASE_SCHEDULE_PDF_BUCKET")
+        if not cls.SUPABASE_SCHEDULE_PDF_PREFIX:
+            raise RuntimeError("Missing required environment variable: SUPABASE_SCHEDULE_PDF_PREFIX")
 
         _validate_positive_number("SUPABASE_HTTP_TIMEOUT_SECONDS", cls.SUPABASE_HTTP_TIMEOUT_SECONDS)
         _validate_positive_number("UIUC_API_TIMEOUT_SECONDS", cls.UIUC_API_TIMEOUT_SECONDS)
         _validate_positive_number("MAX_IMAGE_UPLOAD_BYTES", cls.MAX_IMAGE_UPLOAD_BYTES, integer_only=True)
         _validate_positive_number("MAX_PDF_UPLOAD_BYTES", cls.MAX_PDF_UPLOAD_BYTES, integer_only=True)
         _validate_positive_number("MAX_MANUAL_COURSES_PER_REQUEST", cls.MAX_MANUAL_COURSES_PER_REQUEST, integer_only=True)
+        _validate_positive_number("REDIS_JOB_LEASE_SECONDS", cls.REDIS_JOB_LEASE_SECONDS, integer_only=True)
+        _validate_positive_number("REDIS_JOB_HEARTBEAT_SECONDS", cls.REDIS_JOB_HEARTBEAT_SECONDS, integer_only=True)
+        _validate_positive_number("REDIS_JOB_MAX_ATTEMPTS", cls.REDIS_JOB_MAX_ATTEMPTS, integer_only=True)
+        _validate_positive_number("REDIS_JOB_RETRY_BASE_DELAY_SECONDS", cls.REDIS_JOB_RETRY_BASE_DELAY_SECONDS, integer_only=True)
+        _validate_positive_number("REDIS_JOB_RESULT_TTL_SECONDS", cls.REDIS_JOB_RESULT_TTL_SECONDS, integer_only=True)
