@@ -1,15 +1,26 @@
-# Setup a Python environment using the official Python image
-FROM python:3.12-slim
+FROM python:3.12-slim AS base
 
-# Set working directory to /app in container
 WORKDIR /app
 
-# Install Dependencies
-COPY ./requirements.txt ./
+# Prevent Python from writing .pyc (cache) files and enable unbuffered output
+ENV PYTHONDONTWRITEBYTECODE=1 
+ENV PYTHONUNBUFFERED=1
+
+COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy rest of application code into container
-COPY . .
 
-# Start the Flask application and listen on all interfaces for Docker port mapping
-CMD ["flask", "--app", "app", "run", "--debug", "--host=0.0.0.0", "--port=5000"]
+# -------------------
+# DEV
+# -------------------
+FROM base AS dev
+COPY . .
+CMD ["flask", "--app", "app", "run", "--debug"]
+
+
+# -------------------
+# PROD
+# -------------------
+FROM base AS prod
+COPY . .
+CMD ["gunicorn", "-w", "4", "-b", "0.0.0.0:5000", "app:app"]
