@@ -1,7 +1,7 @@
 import io
 import unittest
 from contextlib import contextmanager
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import jwt
 from jwt.exceptions import InvalidTokenError
@@ -9,6 +9,7 @@ from cryptography.hazmat.primitives.asymmetric import ec
 
 from app import create_app
 from app.config import Config
+from app.jobs.schedule_imports import ScheduleImportWorker
 from app.routes.groups import groups_service
 from app.utils.auth import verify_supabase_jwt
 
@@ -226,6 +227,121 @@ class BackendServiceTestCase(unittest.TestCase):
         self.assertEqual(len(fake_cursor.calls), 2)
         self.assertEqual(fake_cursor.calls[0][1], ("12", "admin-user"))
         self.assertEqual(fake_cursor.calls[1][1], ("12", "owner-user"))
+
+    def test_pdf_job_returns_partial_success_payload(self):
+        queue = Mock()
+        queue.get_job.return_value = {"status": "processing"}
+        worker = ScheduleImportWorker(queue=queue)
+        resolved_courses = [
+            {
+                "Title": "Intro to CS",
+                "Subject": "CS",
+                "Subject Number": "101",
+                "Section": "A",
+                "CRN": "12345",
+                "Course Type": None,
+                "Instructor": None,
+                "Building": None,
+                "Room Number": None,
+                "Start Time": None,
+                "End Time": None,
+                "Days of Week": None,
+            }
+        ]
+        skipped_courses = [
+            {"subject": "MATH", "course_number": "241", "crn": "23456", "error": "UIUC course not found"}
+        ]
+
+        with patch("app.jobs.schedule_imports.download_private_file", return_value=b"pdf"), patch(
+            "app.jobs.schedule_imports.extract_schedule_identifiers_from_pdf",
+            return_value=(
+                [
+                    {"Subject": "CS", "Subject Number": "101", "CRN": "12345"},
+                    {"Subject": "MATH", "Subject Number": "241", "CRN": "23456"},
+                ],
+                {"year": 2026, "term": "fall"},
+            ),
+        ), patch(
+            "app.jobs.schedule_imports.resolve_courses_from_uiuc_partial",
+            return_value=(resolved_courses, skipped_courses),
+        ), patch("app.jobs.schedule_imports.add_courses_by_pdf") as add_courses:
+            result = worker._process_pdf_job({"job_id": "job-1", "user_id": "user-1", "object_path": "path.pdf"})
+
+        add_courses.assert_called_once_with("user-1", 2026, "fall", resolved_courses)
+        self.assertEqual(result["saved_count"], 1)
+        self.assertEqual(result["skipped_count"], 1)
+        self.assertEqual(result["skipped_courses"], skipped_courses)
+        self.assertEqual(result["year"], 2026)
+        self.assertEqual(result["term"], "fall")
+
+    def test_crn_job_returns_partial_success_payload(self):
+        worker = ScheduleImportWorker(queue=Mock())
+        resolved_courses = [
+            {
+                "Title": "Data Structures",
+                "Subject": "CS",
+                "Subject Number": "225",
+                "Section": "AL1",
+                "CRN": "34567",
+                "Course Type": None,
+                "Instructor": None,
+                "Building": None,
+                "Room Number": None,
+                "Start Time": None,
+                "End Time": None,
+                "Days of Week": None,
+            }
+        ]
+        skipped_courses = [
+            {"subject": "STAT", "course_number": "400", "crn": "45678", "error": "UIUC course not found"}
+        ]
+
+        with patch(
+            "app.jobs.schedule_imports.resolve_courses_from_uiuc_partial",
+            return_value=(resolved_courses, skipped_courses),
+        ), patch("app.jobs.schedule_imports.add_resolved_courses_by_crn") as add_courses:
+            result = worker._process_crn_job(
+                {
+                    "user_id": "user-1",
+                    "year": 2026,
+                    "term": "fall",
+                    "payload": {
+                        "courses": [
+                            {"Subject": "CS", "Subject Number": "225", "CRN": "34567"},
+                            {"Subject": "STAT", "Subject Number": "400", "CRN": "45678"},
+                        ]
+                    },
+                }
+            )
+
+        add_courses.assert_called_once_with("user-1", 2026, "fall", resolved_courses)
+        self.assertEqual(result["saved_count"], 1)
+        self.assertEqual(result["skipped_count"], 1)
+        self.assertEqual(result["skipped_courses"], skipped_courses)
+
+    def test_pdf_job_fails_when_all_courses_are_skipped_without_persisting(self):
+        queue = Mock()
+        queue.get_job.return_value = {"status": "processing"}
+        worker = ScheduleImportWorker(queue=queue)
+        skipped_courses = [
+            {"subject": "MATH", "course_number": "241", "crn": "23456", "error": "UIUC course not found"}
+        ]
+
+        with patch("app.jobs.schedule_imports.download_private_file", return_value=b"pdf"), patch(
+            "app.jobs.schedule_imports.extract_schedule_identifiers_from_pdf",
+            return_value=(
+                [{"Subject": "MATH", "Subject Number": "241", "CRN": "23456"}],
+                {"year": 2026, "term": "fall"},
+            ),
+        ), patch(
+            "app.jobs.schedule_imports.resolve_courses_from_uiuc_partial",
+            return_value=([], skipped_courses),
+        ), patch("app.jobs.schedule_imports.add_courses_by_pdf") as add_courses:
+            with self.assertRaises(ValueError) as exc:
+                worker._process_pdf_job({"job_id": "job-2", "user_id": "user-1", "object_path": "path.pdf"})
+
+        add_courses.assert_not_called()
+        self.assertIn("No valid courses could be resolved", str(exc.exception))
 
 
 class BackendAuthValidationTestCase(unittest.TestCase):

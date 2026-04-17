@@ -338,11 +338,48 @@ def _fetch_uiuc_course(year, term, identifier):
     }
 
 
+def _serialize_skipped_course(identifier, error):
+    return {
+        "subject": identifier.get("Subject", ""),
+        "course_number": identifier.get("Subject Number", ""),
+        "crn": str(identifier.get("CRN", "")),
+        "error": str(error),
+    }
+
+
+def summarize_skipped_courses(skipped_courses, prefix="No valid courses could be resolved."):
+    if not skipped_courses:
+        return prefix
+
+    preview = [
+        f'{item["subject"]} {item["course_number"]} CRN {item["crn"]}: {item["error"]}'
+        for item in skipped_courses[:3]
+    ]
+    suffix = f" ({len(skipped_courses) - 3} more skipped)" if len(skipped_courses) > 3 else ""
+    return f"{prefix} {'; '.join(preview)}{suffix}"
+
+
 def resolve_courses_from_uiuc(year, term, course_identifiers):
     return [_fetch_uiuc_course(year, term, identifier) for identifier in course_identifiers]
 
 
+def resolve_courses_from_uiuc_partial(year, term, course_identifiers):
+    courses = []
+    skipped_courses = []
+
+    for identifier in course_identifiers:
+        try:
+            courses.append(_fetch_uiuc_course(year, term, identifier))
+        except ValueError as exc:
+            skipped_courses.append(_serialize_skipped_course(identifier, exc))
+
+    return courses, skipped_courses
+
+
 def _persist_schedule_courses(uid, year, term, courses, replace_existing):
+    if not courses:
+        raise ValueError("No valid courses were provided.")
+
     with get_cursor() as cur:
         cur.execute(
             """

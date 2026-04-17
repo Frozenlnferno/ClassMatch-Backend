@@ -11,13 +11,25 @@ from app.routes.schedules.schedules_service import (
     add_courses_by_pdf,
     add_resolved_courses_by_crn,
     extract_schedule_identifiers_from_pdf,
-    resolve_courses_from_uiuc,
+    resolve_courses_from_uiuc_partial,
     serialize_courses_for_response,
+    summarize_skipped_courses,
 )
 from app.utils.logger import get_logger
 from app.utils.supabase_admin import delete_file, download_private_file
 
 logger = get_logger(__name__)
+
+
+def _build_result_payload(year: int, term: str, courses: list[dict], skipped_courses: list[dict]) -> dict:
+    return {
+        "year": year,
+        "term": term,
+        "courses": serialize_courses_for_response(courses),
+        "saved_count": len(courses),
+        "skipped_count": len(skipped_courses),
+        "skipped_courses": skipped_courses,
+    }
 
 
 class ScheduleImportWorker:
@@ -77,20 +89,24 @@ class ScheduleImportWorker:
         current_job = self.queue.get_job(job["job_id"])
         if not current_job or current_job.get("status") != "processing":
             raise RuntimeError("Job is no longer active.")
-        courses = resolve_courses_from_uiuc(schedule_info["year"], schedule_info["term"], course_identifiers)
+        courses, skipped_courses = resolve_courses_from_uiuc_partial(
+            schedule_info["year"],
+            schedule_info["term"],
+            course_identifiers,
+        )
+        if not courses:
+            raise ValueError(summarize_skipped_courses(skipped_courses))
         add_courses_by_pdf(job["user_id"], schedule_info["year"], schedule_info["term"], courses)
-        return {
-            "year": schedule_info["year"],
-            "term": schedule_info["term"],
-            "courses": serialize_courses_for_response(courses),
-        }
+        return _build_result_payload(schedule_info["year"], schedule_info["term"], courses, skipped_courses)
 
     def _process_crn_job(self, job: dict) -> dict:
         payload = job.get("payload") or {}
-        courses = resolve_courses_from_uiuc(job["year"], job["term"], payload.get("courses", []))
+        courses, skipped_courses = resolve_courses_from_uiuc_partial(
+            job["year"],
+            job["term"],
+            payload.get("courses", []),
+        )
+        if not courses:
+            raise ValueError(summarize_skipped_courses(skipped_courses))
         add_resolved_courses_by_crn(job["user_id"], job["year"], job["term"], courses)
-        return {
-            "year": job["year"],
-            "term": job["term"],
-            "courses": serialize_courses_for_response(courses),
-        }
+        return _build_result_payload(job["year"], job["term"], courses, skipped_courses)
