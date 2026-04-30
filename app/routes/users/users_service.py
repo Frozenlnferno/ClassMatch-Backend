@@ -3,6 +3,8 @@ from supabase_auth.errors import AuthRetryableError
 from app.utils.db import get_cursor
 from app.utils.supabase_admin import get_supabase_admin_client
 
+UNSET = object()
+
 
 class AccountDeletionUnavailableError(RuntimeError):
     """Raised when account deletion cannot be completed due to an upstream dependency."""
@@ -45,19 +47,19 @@ def get_user_info(user_id):
     }
 
 
-def update_self_info(user_id, name=None, bio=None, avatar_url=None):
+def update_self_info(user_id, name=UNSET, bio=UNSET, avatar_url=UNSET):
     fields = []
     values = []
 
-    if name is not None:
+    if name is not UNSET:
         fields.append("name = %s")
         values.append(name)
 
-    if bio is not None:
+    if bio is not UNSET:
         fields.append("bio = %s")
         values.append(bio)
 
-    if avatar_url is not None:
+    if avatar_url is not UNSET:
         fields.append("avatar_url = %s")
         values.append(avatar_url)
 

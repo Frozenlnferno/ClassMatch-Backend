@@ -1,4 +1,5 @@
 from typing import Union
+from urllib.parse import unquote, urlparse
 
 from httpx import Client as HttpxClient
 from httpx import Timeout
@@ -103,3 +104,23 @@ def delete_file(object_path: str, bucket_name: str) -> None:
         return
     bucket = get_supabase_admin_client().storage.from_(bucket_name)
     bucket.remove([object_path])
+
+
+def get_public_file_object_path(public_url: str, bucket_name: str = DEFAULT_STORAGE_BUCKET) -> str | None:
+    if not public_url or not bucket_name:
+        return None
+
+    parsed = urlparse(public_url)
+    path = unquote(parsed.path or "")
+    marker = f"/storage/v1/object/public/{bucket_name}/"
+    if marker not in path:
+        return None
+
+    object_path = path.split(marker, 1)[1].strip("/")
+    return object_path or None
+
+
+def delete_public_file_from_url(public_url: str, bucket_name: str = DEFAULT_STORAGE_BUCKET) -> None:
+    object_path = get_public_file_object_path(public_url, bucket_name)
+    if object_path:
+        delete_file(object_path, bucket_name)

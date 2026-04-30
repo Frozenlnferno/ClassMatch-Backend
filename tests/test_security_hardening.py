@@ -11,7 +11,9 @@ from app import create_app
 from app.config import Config
 from app.jobs.schedule_imports import ScheduleImportWorker
 from app.routes.groups import groups_service
+from app.routes.users import users_service
 from app.routes.schedules.schedules_service import extract_schedule_identifiers_from_ics
+from app.utils.supabase_admin import get_public_file_object_path
 from app.utils.auth import verify_supabase_jwt
 
 
@@ -229,8 +231,44 @@ class BackendRouteTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.get_json()["status"], "processing")
 
+    def test_profile_update_accepts_null_avatar_url(self):
+        with patch(
+            "app.routes.users.users_controller.get_self_info",
+            return_value={"avatar_url": "http://127.0.0.1:54321/storage/v1/object/public/images/avatars/user-1/old.png"},
+        ), patch("app.routes.users.users_controller.update_self_info") as update_self_info, patch(
+            "app.routes.users.users_controller.delete_public_file_from_url"
+        ) as delete_public_file_from_url:
+            response = self.client.patch(
+                "/api/users/me",
+                json={"avatar_url": None},
+                headers=self._auth_header(),
+            )
+
+        self.assertEqual(response.status_code, 200)
+        update_self_info.assert_called_once_with("user-1", users_service.UNSET, users_service.UNSET, None)
+        delete_public_file_from_url.assert_called_once()
+
 
 class BackendServiceTestCase(unittest.TestCase):
+    def test_public_file_object_path_is_extracted_from_supabase_url(self):
+        object_path = get_public_file_object_path(
+            "http://127.0.0.1:54321/storage/v1/object/public/images/avatars/user-1/photo.png"
+        )
+
+        self.assertEqual(object_path, "avatars/user-1/photo.png")
+
+    def test_update_self_info_can_clear_avatar_url(self):
+        fake_cursor = _FakeCursor()
+
+        @contextmanager
+        def fake_get_cursor():
+            yield fake_cursor
+
+        with patch("app.routes.users.users_service.get_cursor", fake_get_cursor):
+            users_service.update_self_info("user-1", avatar_url=None)
+
+        self.assertEqual(fake_cursor.calls[0][1], [None, "user-1"])
+
     def test_kick_member_checks_requester_and_target_separately(self):
         fake_cursor = _FakeCursor(fetchone_values=[("admin",), ("owner",)])
 

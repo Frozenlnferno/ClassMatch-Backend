@@ -7,9 +7,10 @@ from app.utils.auth import require_auth
 from app.utils.logger import get_logger
 from werkzeug.utils import secure_filename
 
-from app.utils.supabase_admin import upload_public_file
+from app.utils.supabase_admin import delete_public_file_from_url, upload_public_file
 from .users_service import (
     AccountDeletionUnavailableError,
+    UNSET,
     delete_self_account,
     get_self_info,
     get_user_info,
@@ -72,6 +73,15 @@ def _read_validated_image(*field_names):
         raise ValueError(f"Image file must be smaller than {_format_size_limit(max_image_size_bytes)}")
     return file_bytes, content_type, extension
 
+
+def _delete_previous_image(public_url, context):
+    if not public_url:
+        return
+    try:
+        delete_public_file_from_url(public_url)
+    except Exception as exc:
+        logger.warning("Failed to delete previous image", extra={"context": context, "error": str(exc)})
+
 @bp.route("/me", methods=["GET"])
 @require_auth
 def get_current_user_info():
@@ -90,10 +100,15 @@ def update_current_user_info():
         user_id = g.user["sub"]
         data = request.get_json(silent=True) or {}
 
-        name = data["name"] if "name" in data else None
-        bio = data["bio"] if "bio" in data else None
-        avatar_url = data["avatar_url"] if "avatar_url" in data else None
+        name = data["name"] if "name" in data else UNSET
+        bio = data["bio"] if "bio" in data else UNSET
+        avatar_url = data["avatar_url"] if "avatar_url" in data else UNSET
+        previous_avatar_url = None
+        if avatar_url is not UNSET:
+            previous_avatar_url = get_self_info(user_id).get("avatar_url")
         update_self_info(user_id, name, bio, avatar_url)
+        if avatar_url is not UNSET and previous_avatar_url and previous_avatar_url != avatar_url:
+            _delete_previous_image(previous_avatar_url, "profile_avatar_update")
     except Exception as e:
         logger.exception("Error updating self info", extra={"error": str(e)})
         return jsonify({"error": "Failed to update self info"}), 500
@@ -107,9 +122,12 @@ def upload_current_user_avatar():
 
     try:
         file_bytes, content_type, extension = _read_validated_image("image", "avatar")
+        previous_avatar_url = get_self_info(user_id).get("avatar_url")
         object_path = f"avatars/{user_id}/{uuid4().hex}.{extension}"
         avatar_url = upload_public_file(object_path, file_bytes, content_type)
         update_self_info(user_id, avatar_url=avatar_url)
+        if previous_avatar_url and previous_avatar_url != avatar_url:
+            _delete_previous_image(previous_avatar_url, "profile_avatar_upload")
     except ValueError as e:
         logger.warning("Invalid avatar upload", extra={"error": str(e)})
         return jsonify({"error": str(e)}), 400

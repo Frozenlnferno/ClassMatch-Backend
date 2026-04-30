@@ -7,7 +7,7 @@ from app.utils.auth import require_auth
 from app.utils.logger import get_logger
 from werkzeug.utils import secure_filename
 
-from app.utils.supabase_admin import upload_public_file
+from app.utils.supabase_admin import delete_public_file_from_url, upload_public_file
 from .groups_service import (
     GROUP_NOT_FOUND_ERROR,
     UNSET,
@@ -77,6 +77,15 @@ def _read_validated_image(*field_names):
     if len(file_bytes) > max_image_size_bytes:
         raise ValueError(f"Image file must be smaller than {_format_size_limit(max_image_size_bytes)}")
     return file_bytes, content_type, extension
+
+
+def _delete_previous_image(public_url, context):
+    if not public_url:
+        return
+    try:
+        delete_public_file_from_url(public_url)
+    except Exception as exc:
+        logger.warning("Failed to delete previous image", extra={"context": context, "error": str(exc)})
 
 @bp.route("/", methods=["GET"])
 @require_auth
@@ -179,7 +188,12 @@ def update_group_info(group_id):
     group_icon_url = data["group_icon_url"] if "group_icon_url" in data else UNSET
 
     try:
+        previous_icon_url = None
+        if group_icon_url is not UNSET:
+            previous_icon_url = get_group_details(admin_id, group_id).get("group_icon_url")
         change_group_info(admin_id, group_id, name, description, joinable, group_icon_url)
+        if group_icon_url is not UNSET and previous_icon_url and previous_icon_url != group_icon_url:
+            _delete_previous_image(previous_icon_url, "group_icon_update")
     except PermissionError as e:
         logger.warning("Permission denied updating group info", extra={"error": str(e)})
         return jsonify({"error": str(e)}), 403
@@ -270,9 +284,12 @@ def upload_group_icon_route(group_id):
 
     try:
         file_bytes, content_type, extension = _read_validated_image("image", "icon")
+        previous_icon_url = get_group_details(admin_id, group_id).get("group_icon_url")
         object_path = f"groups/{group_id}/{uuid4().hex}.{extension}"
         public_url = upload_public_file(object_path, file_bytes, content_type)
         change_group_info(admin_id, group_id, None, None, None, public_url)
+        if previous_icon_url and previous_icon_url != public_url:
+            _delete_previous_image(previous_icon_url, "group_icon_upload")
     except PermissionError as e:
         logger.warning("Permission denied uploading group icon", extra={"error": str(e)})
         return jsonify({"error": str(e)}), 403
