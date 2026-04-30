@@ -4,7 +4,7 @@ import json
 from uuid import uuid4
 
 from app.config import Config
-from app.jobs.queue import JOB_TYPE_CRN, JOB_TYPE_PDF, RedisJobQueue
+from app.jobs.queue import JOB_TYPE_CRN, JOB_TYPE_ICS, RedisJobQueue
 from app.utils.supabase_admin import upload_private_file
 
 
@@ -25,21 +25,21 @@ def _build_job_response(job: dict) -> dict:
     return response
 
 
-def create_pdf_import_job(user_id: str, pdf_bytes: bytes, filename: str, content_type: str) -> dict:
+def create_ics_import_job(user_id: str, ics_bytes: bytes, filename: str, content_type: str) -> dict:
     job_id = str(uuid4())
-    object_path = Config.build_schedule_pdf_object_path(user_id, filename, job_id)
-    upload_private_file(object_path, pdf_bytes, content_type, Config.SUPABASE_SCHEDULE_PDF_BUCKET)
+    object_path = Config.build_schedule_ics_object_path(user_id, filename, job_id)
+    upload_private_file(object_path, ics_bytes, content_type, Config.SUPABASE_SCHEDULE_ICS_BUCKET)
 
     queue = RedisJobQueue()
     metadata = {
-        "job_type": JOB_TYPE_PDF,
+        "job_type": JOB_TYPE_ICS,
         "user_id": user_id,
         "year": 0,
         "term": "pending",
         "max_attempts": Config.REDIS_JOB_MAX_ATTEMPTS,
         "payload_json": "",
         "object_path": object_path,
-        "original_filename": filename or "schedule.pdf",
+        "original_filename": filename or "schedule.ics",
     }
     queue.enqueue_job(job_id, metadata)
     job = queue.get_job(job_id)

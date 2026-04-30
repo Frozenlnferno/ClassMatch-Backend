@@ -2,7 +2,7 @@ import math
 
 from flask import request, jsonify, g, Blueprint
 from app.config import Config
-from app.jobs import create_crn_import_job, create_pdf_import_job, get_job_status_for_user
+from app.jobs import create_crn_import_job, create_ics_import_job, get_job_status_for_user
 from app.utils.auth import require_auth
 from app.utils.logger import get_logger
 from .schedules_service import (
@@ -53,29 +53,28 @@ def get_all_schedules_route():
 @require_auth
 def create_schedule():
     user_id = g.user["sub"]
-    pdf = request.files.get("pdf")
+    ics = request.files.get("ics")
 
-    if not pdf:
-        return jsonify({"error": "No PDF file uploaded"}), 400
+    if not ics:
+        return jsonify({"error": "No ICS file uploaded"}), 400
 
-    # Validate file type
-    if not pdf.filename or not pdf.filename.lower().endswith('.pdf'):
-        return jsonify({"error": "File must be a PDF"}), 400
+    if not ics.filename or not ics.filename.lower().endswith(".ics"):
+        return jsonify({"error": "File must be an ICS calendar file"}), 400
 
-    pdf.stream.seek(0)
-    max_pdf_size_bytes = Config.MAX_PDF_UPLOAD_BYTES
-    pdf_bytes = pdf.read(max_pdf_size_bytes + 1)
-    if not pdf_bytes:
-        return jsonify({"error": "PDF file appears to be empty"}), 400
-    if len(pdf_bytes) > max_pdf_size_bytes:
-        return jsonify({"error": f"PDF file must be smaller than {_format_size_limit(max_pdf_size_bytes)}"}), 400
+    ics.stream.seek(0)
+    max_ics_size_bytes = Config.MAX_ICS_UPLOAD_BYTES
+    ics_bytes = ics.read(max_ics_size_bytes + 1)
+    if not ics_bytes:
+        return jsonify({"error": "ICS file appears to be empty"}), 400
+    if len(ics_bytes) > max_ics_size_bytes:
+        return jsonify({"error": f"ICS file must be smaller than {_format_size_limit(max_ics_size_bytes)}"}), 400
 
     try:
-        job = create_pdf_import_job(
+        job = create_ics_import_job(
             user_id=user_id,
-            pdf_bytes=pdf_bytes,
-            filename=pdf.filename,
-            content_type=(pdf.content_type or "application/pdf").split(";", 1)[0].strip() or "application/pdf",
+            ics_bytes=ics_bytes,
+            filename=ics.filename,
+            content_type=(ics.content_type or "text/calendar").split(";", 1)[0].strip() or "text/calendar",
         )
         return jsonify(job), 202
     except ValueError as e:

@@ -1,18 +1,19 @@
 import xml.etree.ElementTree as ET
 from datetime import datetime, time as dt_time
+import html
+import re
 
 import requests
-from PyPDF2 import PdfReader
 
 from app.routes.groups.groups_service import GROUP_NOT_FOUND_ERROR
 from app.config import Config
 from app.utils.db import get_cursor
 from app.utils.logger import get_logger
 
-from .parser import parse_schedule_pdf
-
 UIUC_EXPLORER_URL = "https://courses.illinois.edu/cisapp/explorer/schedule/{year}/{term}/{subject}/{course}/{crn}.xml"
 logger = get_logger(__name__)
+COURSE_SUMMARY_RE = re.compile(r"\b([A-Z]{2,5})\s+([0-9]{3}[A-Z]?)\s+([A-Z0-9]+)\s*$")
+CRN_RE = re.compile(r"\bCRN:\s*([0-9]{5})\b", re.IGNORECASE)
 
 
 def _normalize_text(value):
@@ -236,32 +237,137 @@ def _extract_room_number(root):
     return _find_first_text(root, {"roomNumber", "room"})
 
 
-def extract_schedule_identifiers_from_pdf(file):
+def _decode_ics_text(ics_bytes):
     try:
-        reader = PdfReader(file)
-    except Exception as exc:
-        raise ValueError(f"Failed to read PDF file: {str(exc)}. Please ensure the file is a valid PDF.") from exc
-
-    if len(reader.pages) == 0:
-        raise ValueError("PDF file appears to be empty or corrupted.")
-
-    text = ""
-    for page in reader.pages:
+        return ics_bytes.decode("utf-8-sig")
+    except UnicodeDecodeError:
         try:
-            extracted = page.extract_text()
-            if extracted:
-                text += extracted + "\n"
-        except Exception as exc:
-            logger.warning(
-                "Failed to extract text from PDF page",
-                extra={"error": str(exc)},
-            )
+            return ics_bytes.decode("latin-1")
+        except UnicodeDecodeError as exc:
+            raise ValueError("Failed to read ICS file. Please ensure the file is a valid calendar export.") from exc
+
+
+def _unfold_ics_lines(text):
+    unfolded_lines = []
+    for raw_line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        if raw_line.startswith((" ", "\t")) and unfolded_lines:
+            unfolded_lines[-1] += raw_line[1:]
+        else:
+            unfolded_lines.append(raw_line)
+    return unfolded_lines
+
+
+def _split_ics_name_value(line):
+    if ":" not in line:
+        return "", ""
+    name_part, value = line.split(":", 1)
+    name = name_part.split(";", 1)[0].upper()
+    return name, value
+
+
+def _unescape_ics_value(value):
+    unescaped = (
+        value.replace("\\n", "\n")
+        .replace("\\N", "\n")
+        .replace("\\,", ",")
+        .replace("\\;", ";")
+        .replace("\\\\", "\\")
+    )
+    return html.unescape(unescaped)
+
+
+def _parse_ics_datetime(value):
+    normalized = value.strip()
+    if not normalized:
+        return None
+    if normalized.endswith("Z"):
+        normalized = normalized[:-1]
+    for date_format in ("%Y%m%dT%H%M%S", "%Y%m%dT%H%M", "%Y%m%d"):
+        try:
+            return datetime.strptime(normalized, date_format)
+        except ValueError:
+            continue
+    return None
+
+
+def _term_from_month(month):
+    if 1 <= month <= 5:
+        return "spring"
+    if 6 <= month <= 7:
+        return "summer"
+    return "fall"
+
+
+def _extract_ics_events(lines):
+    events = []
+    current_event = None
+    for line in lines:
+        upper_line = line.strip().upper()
+        if upper_line == "BEGIN:VEVENT":
+            current_event = {}
+            continue
+        if upper_line == "END:VEVENT":
+            if current_event is not None:
+                events.append(current_event)
+            current_event = None
+            continue
+        if current_event is None:
             continue
 
-    if not text.strip():
-        raise ValueError("No readable text found in PDF. The PDF may be image-based or corrupted.")
+        name, value = _split_ics_name_value(line)
+        if name in {"SUMMARY", "DESCRIPTION", "DTSTART"} and name not in current_event:
+            current_event[name] = _unescape_ics_value(value)
+    return events
 
-    return parse_schedule_pdf(text)
+
+def extract_schedule_identifiers_from_ics(ics_bytes):
+    text = _decode_ics_text(ics_bytes)
+    if not text.strip():
+        raise ValueError("ICS file appears to be empty.")
+    if "BEGIN:VCALENDAR" not in text.upper() or "BEGIN:VEVENT" not in text.upper():
+        raise ValueError("ICS file does not contain calendar events.")
+
+    events = _extract_ics_events(_unfold_ics_lines(text))
+    if not events:
+        raise ValueError("ICS file does not contain calendar events.")
+
+    course_identifiers = []
+    class_dates = []
+    seen = set()
+    for event in events:
+        summary = _normalize_text(event.get("SUMMARY", ""))
+        description = event.get("DESCRIPTION", "")
+        start_date = _parse_ics_datetime(event.get("DTSTART", ""))
+        if start_date:
+            class_dates.append(start_date)
+
+        course_match = COURSE_SUMMARY_RE.search(summary)
+        crn_match = CRN_RE.search(description)
+        if not course_match or not crn_match:
+            continue
+
+        subject, course_number, _section = course_match.groups()
+        crn = crn_match.group(1)
+        dedupe_key = (subject, course_number, crn)
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        course_identifiers.append({
+            "Subject": subject,
+            "Subject Number": course_number,
+            "CRN": crn,
+        })
+
+    if not course_identifiers:
+        raise ValueError("No recognizable courses were found in the ICS file.")
+    if not class_dates:
+        raise ValueError("No class dates were found in the ICS file.")
+
+    first_class_date = min(class_dates)
+    return course_identifiers, {
+        "year": first_class_date.year,
+        "term": _term_from_month(first_class_date.month),
+    }
 
 
 def _fetch_uiuc_course(year, term, identifier):
@@ -474,7 +580,7 @@ def _persist_schedule_courses(uid, year, term, courses, replace_existing):
             )
 
 
-def add_courses_by_pdf(uid, year, term, courses):
+def add_courses_by_ics(uid, year, term, courses):
     _persist_schedule_courses(uid, year, term, courses, replace_existing=True)
 
 

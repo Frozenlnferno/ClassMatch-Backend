@@ -4,7 +4,6 @@ gunicorn==25.3.0
 httpx[http2]==0.28.1
 psycopg2-binary==2.9.11
 PyJWT[crypto]==2.10.1
-PyPDF2==3.0.1
 python-dotenv==1.2.1
 python-json-logger==3.3.0
 redis==6.4.0

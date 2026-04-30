@@ -20,7 +20,7 @@ STATUS_FAILED = "failed"
 STATUS_CANCELED = "canceled"
 TERMINAL_STATUSES = {STATUS_COMPLETED, STATUS_FAILED, STATUS_CANCELED}
 
-JOB_TYPE_PDF = "pdf_schedule_import"
+JOB_TYPE_ICS = "ics_schedule_import"
 JOB_TYPE_CRN = "crn_schedule_import"
 
 

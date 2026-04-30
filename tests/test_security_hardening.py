@@ -11,7 +11,25 @@ from app import create_app
 from app.config import Config
 from app.jobs.schedule_imports import ScheduleImportWorker
 from app.routes.groups import groups_service
+from app.routes.schedules.schedules_service import extract_schedule_identifiers_from_ics
 from app.utils.auth import verify_supabase_jwt
+
+
+SAMPLE_ICS = b"""BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//Ellucian//Registration SS//EN
+BEGIN:VEVENT
+DTSTART;TZID=America/Chicago:20260120T123000
+SUMMARY:Database Systems CS 411 U3
+DESCRIPTION:CRN: 31352\\nCredit Hours: 3.0\\nInstructor: Alawini\\, Abdussalam (Primary) \\n
+END:VEVENT
+BEGIN:VEVENT
+DTSTART;TZID=America/Chicago:20260121T100000
+SUMMARY:Differential Equations MATH 441 B13
+DESCRIPTION:CRN: 61553\\nCredit Hours: 3.0\\nInstructor: Tzirakis\\, Nikolaos (Primary) \\n
+END:VEVENT
+END:VCALENDAR
+"""
 
 
 class _DummySigningKey:
@@ -59,13 +77,13 @@ class BackendRouteTestCase(unittest.TestCase):
             SUPABASE_HTTP_TIMEOUT_SECONDS=20.0,
             UIUC_API_TIMEOUT_SECONDS=5.0,
             MAX_IMAGE_UPLOAD_BYTES=16,
-            MAX_PDF_UPLOAD_BYTES=32,
+            MAX_ICS_UPLOAD_BYTES=32,
             MAX_MANUAL_COURSES_PER_REQUEST=2,
             DATABASE_URL="postgresql://postgres:postgres@localhost:5432/postgres",
             DB_SSLMODE="disable",
             LOG_OPTIONS_REQUESTS=False,
-            SUPABASE_SCHEDULE_PDF_BUCKET="schedule-pdfs",
-            SUPABASE_SCHEDULE_PDF_PREFIX="schedule-imports",
+            SUPABASE_SCHEDULE_ICS_BUCKET="schedule-ics",
+            SUPABASE_SCHEDULE_ICS_PREFIX="schedule-imports",
             REDIS_URL="redis://localhost:6379/0",
             REDIS_JOB_LEASE_SECONDS=60,
             REDIS_JOB_HEARTBEAT_SECONDS=20,
@@ -138,10 +156,10 @@ class BackendRouteTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn("smaller than", response.get_json()["error"])
 
-    def test_schedule_upload_rejects_oversized_pdf(self):
+    def test_schedule_upload_rejects_oversized_ics(self):
         response = self.client.post(
             "/api/schedules/",
-            data={"pdf": (io.BytesIO(b"x" * 64), "schedule.pdf")},
+            data={"ics": (io.BytesIO(b"x" * 64), "schedule.ics")},
             headers=self._auth_header(),
             content_type="multipart/form-data",
         )
@@ -167,12 +185,12 @@ class BackendRouteTestCase(unittest.TestCase):
 
     def test_schedule_upload_returns_async_job(self):
         with patch(
-            "app.routes.schedules.schedules_controller.create_pdf_import_job",
-            return_value={"job_id": "job-1", "job_type": "pdf_schedule_import", "status": "queued"},
+            "app.routes.schedules.schedules_controller.create_ics_import_job",
+            return_value={"job_id": "job-1", "job_type": "ics_schedule_import", "status": "queued"},
         ):
             response = self.client.post(
                 "/api/schedules/",
-                data={"pdf": (io.BytesIO(b"x" * 16), "schedule.pdf")},
+                data={"ics": (io.BytesIO(b"x" * 16), "schedule.ics")},
                 headers=self._auth_header(),
                 content_type="multipart/form-data",
             )
@@ -228,7 +246,7 @@ class BackendServiceTestCase(unittest.TestCase):
         self.assertEqual(fake_cursor.calls[0][1], ("12", "admin-user"))
         self.assertEqual(fake_cursor.calls[1][1], ("12", "owner-user"))
 
-    def test_pdf_job_returns_partial_success_payload(self):
+    def test_ics_job_returns_partial_success_payload(self):
         queue = Mock()
         queue.get_job.return_value = {"status": "processing"}
         worker = ScheduleImportWorker(queue=queue)
@@ -252,8 +270,8 @@ class BackendServiceTestCase(unittest.TestCase):
             {"subject": "MATH", "course_number": "241", "crn": "23456", "error": "UIUC course not found"}
         ]
 
-        with patch("app.jobs.schedule_imports.download_private_file", return_value=b"pdf"), patch(
-            "app.jobs.schedule_imports.extract_schedule_identifiers_from_pdf",
+        with patch("app.jobs.schedule_imports.download_private_file", return_value=SAMPLE_ICS), patch(
+            "app.jobs.schedule_imports.extract_schedule_identifiers_from_ics",
             return_value=(
                 [
                     {"Subject": "CS", "Subject Number": "101", "CRN": "12345"},
@@ -264,8 +282,8 @@ class BackendServiceTestCase(unittest.TestCase):
         ), patch(
             "app.jobs.schedule_imports.resolve_courses_from_uiuc_partial",
             return_value=(resolved_courses, skipped_courses),
-        ), patch("app.jobs.schedule_imports.add_courses_by_pdf") as add_courses:
-            result = worker._process_pdf_job({"job_id": "job-1", "user_id": "user-1", "object_path": "path.pdf"})
+        ), patch("app.jobs.schedule_imports.add_courses_by_ics") as add_courses:
+            result = worker._process_ics_job({"job_id": "job-1", "user_id": "user-1", "object_path": "path.ics"})
 
         add_courses.assert_called_once_with("user-1", 2026, "fall", resolved_courses)
         self.assertEqual(result["saved_count"], 1)
@@ -319,7 +337,7 @@ class BackendServiceTestCase(unittest.TestCase):
         self.assertEqual(result["skipped_count"], 1)
         self.assertEqual(result["skipped_courses"], skipped_courses)
 
-    def test_pdf_job_fails_when_all_courses_are_skipped_without_persisting(self):
+    def test_ics_job_fails_when_all_courses_are_skipped_without_persisting(self):
         queue = Mock()
         queue.get_job.return_value = {"status": "processing"}
         worker = ScheduleImportWorker(queue=queue)
@@ -327,8 +345,8 @@ class BackendServiceTestCase(unittest.TestCase):
             {"subject": "MATH", "course_number": "241", "crn": "23456", "error": "UIUC course not found"}
         ]
 
-        with patch("app.jobs.schedule_imports.download_private_file", return_value=b"pdf"), patch(
-            "app.jobs.schedule_imports.extract_schedule_identifiers_from_pdf",
+        with patch("app.jobs.schedule_imports.download_private_file", return_value=SAMPLE_ICS), patch(
+            "app.jobs.schedule_imports.extract_schedule_identifiers_from_ics",
             return_value=(
                 [{"Subject": "MATH", "Subject Number": "241", "CRN": "23456"}],
                 {"year": 2026, "term": "fall"},
@@ -336,12 +354,18 @@ class BackendServiceTestCase(unittest.TestCase):
         ), patch(
             "app.jobs.schedule_imports.resolve_courses_from_uiuc_partial",
             return_value=([], skipped_courses),
-        ), patch("app.jobs.schedule_imports.add_courses_by_pdf") as add_courses:
+        ), patch("app.jobs.schedule_imports.add_courses_by_ics") as add_courses:
             with self.assertRaises(ValueError) as exc:
-                worker._process_pdf_job({"job_id": "job-2", "user_id": "user-1", "object_path": "path.pdf"})
+                worker._process_ics_job({"job_id": "job-2", "user_id": "user-1", "object_path": "path.ics"})
 
         add_courses.assert_not_called()
         self.assertIn("No valid courses could be resolved", str(exc.exception))
+
+    def test_ics_parser_extracts_courses_and_term(self):
+        course_identifiers, schedule_info = extract_schedule_identifiers_from_ics(SAMPLE_ICS)
+
+        self.assertEqual(schedule_info, {"year": 2026, "term": "spring"})
+        self.assertIn({"Subject": "CS", "Subject Number": "411", "CRN": "31352"}, course_identifiers)
 
 
 class BackendAuthValidationTestCase(unittest.TestCase):
@@ -398,13 +422,13 @@ class BackendConfigValidationTestCase(unittest.TestCase):
             SUPABASE_HTTP_TIMEOUT_SECONDS=20.0,
             UIUC_API_TIMEOUT_SECONDS=5.0,
             MAX_IMAGE_UPLOAD_BYTES=16,
-            MAX_PDF_UPLOAD_BYTES=32,
+            MAX_ICS_UPLOAD_BYTES=32,
             MAX_MANUAL_COURSES_PER_REQUEST=2,
             DATABASE_URL="postgresql://postgres:postgres@localhost:5432/postgres",
             DB_SSLMODE="disable",
             LOG_OPTIONS_REQUESTS=False,
-            SUPABASE_SCHEDULE_PDF_BUCKET="schedule-pdfs",
-            SUPABASE_SCHEDULE_PDF_PREFIX="schedule-imports",
+            SUPABASE_SCHEDULE_ICS_BUCKET="schedule-ics",
+            SUPABASE_SCHEDULE_ICS_PREFIX="schedule-imports",
             REDIS_URL="redis://localhost:6379/0",
             REDIS_JOB_LEASE_SECONDS=60,
             REDIS_JOB_HEARTBEAT_SECONDS=20,

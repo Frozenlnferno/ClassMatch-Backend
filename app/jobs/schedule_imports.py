@@ -1,16 +1,15 @@
 from __future__ import annotations
 
-import io
 import threading
 import time
 from contextlib import contextmanager
 
 from app.config import Config
-from app.jobs.queue import JOB_TYPE_CRN, JOB_TYPE_PDF, RedisJobQueue
+from app.jobs.queue import JOB_TYPE_CRN, JOB_TYPE_ICS, RedisJobQueue
 from app.routes.schedules.schedules_service import (
-    add_courses_by_pdf,
+    add_courses_by_ics,
     add_resolved_courses_by_crn,
-    extract_schedule_identifiers_from_pdf,
+    extract_schedule_identifiers_from_ics,
     resolve_courses_from_uiuc_partial,
     serialize_courses_for_response,
     summarize_skipped_courses,
@@ -57,8 +56,8 @@ class ScheduleImportWorker:
         heartbeat_thread = threading.Thread(target=self._heartbeat_loop, args=(lease, stop_event), daemon=True)
         heartbeat_thread.start()
         try:
-            if job["job_type"] == JOB_TYPE_PDF:
-                result_payload = self._process_pdf_job(job)
+            if job["job_type"] == JOB_TYPE_ICS:
+                result_payload = self._process_ics_job(job)
             elif job["job_type"] == JOB_TYPE_CRN:
                 result_payload = self._process_crn_job(job)
             else:
@@ -66,12 +65,12 @@ class ScheduleImportWorker:
 
             status = self.queue.complete_job(lease, job, result_payload)
             if status in {"completed", "superseded"} and job.get("object_path"):
-                delete_file(job["object_path"], Config.SUPABASE_SCHEDULE_PDF_BUCKET)
+                delete_file(job["object_path"], Config.SUPABASE_SCHEDULE_ICS_BUCKET)
         except Exception as exc:
             logger.exception("Failed to process schedule import job", extra={"job_id": job["job_id"], "error": str(exc)})
             status = self.queue.fail_or_retry_job(lease, job, str(exc))
             if status in {"failed", "superseded"} and job.get("object_path"):
-                delete_file(job["object_path"], Config.SUPABASE_SCHEDULE_PDF_BUCKET)
+                delete_file(job["object_path"], Config.SUPABASE_SCHEDULE_ICS_BUCKET)
         finally:
             stop_event.set()
             heartbeat_thread.join(timeout=1)
@@ -81,11 +80,9 @@ class ScheduleImportWorker:
             if not self.queue.heartbeat(lease):
                 return
 
-    def _process_pdf_job(self, job: dict) -> dict:
-        pdf_bytes = download_private_file(job["object_path"], Config.SUPABASE_SCHEDULE_PDF_BUCKET)
-        pdf_buffer = io.BytesIO(pdf_bytes)
-        pdf_buffer.name = job.get("original_filename") or "schedule.pdf"
-        course_identifiers, schedule_info = extract_schedule_identifiers_from_pdf(pdf_buffer)
+    def _process_ics_job(self, job: dict) -> dict:
+        ics_bytes = download_private_file(job["object_path"], Config.SUPABASE_SCHEDULE_ICS_BUCKET)
+        course_identifiers, schedule_info = extract_schedule_identifiers_from_ics(ics_bytes)
         current_job = self.queue.get_job(job["job_id"])
         if not current_job or current_job.get("status") != "processing":
             raise RuntimeError("Job is no longer active.")
@@ -96,7 +93,7 @@ class ScheduleImportWorker:
         )
         if not courses:
             raise ValueError(summarize_skipped_courses(skipped_courses))
-        add_courses_by_pdf(job["user_id"], schedule_info["year"], schedule_info["term"], courses)
+        add_courses_by_ics(job["user_id"], schedule_info["year"], schedule_info["term"], courses)
         return _build_result_payload(schedule_info["year"], schedule_info["term"], courses, skipped_courses)
 
     def _process_crn_job(self, job: dict) -> dict:
