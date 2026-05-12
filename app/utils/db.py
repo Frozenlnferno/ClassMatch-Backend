@@ -1,8 +1,17 @@
 from contextlib import contextmanager
+from psycopg2 import DatabaseError, InterfaceError, OperationalError
 from app import extensions
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+_CONNECTION_LOSS_MESSAGES = (
+    "server closed the connection unexpectedly",
+    "connection already closed",
+    "ssl syscall error",
+    "eof detected",
+    "terminating connection",
+)
 
 
 class _LoggingCursor:
@@ -33,12 +42,25 @@ def _sanitize_query(query):
     query = " ".join(str(query).split())
     return query[:500]
 
+
+def _should_discard_connection(conn, exc=None):
+    if conn is None:
+        return False
+    if getattr(conn, "closed", False):
+        return True
+    if exc is None or not isinstance(exc, (OperationalError, InterfaceError, DatabaseError)):
+        return False
+
+    error = str(exc).lower()
+    return any(message in error for message in _CONNECTION_LOSS_MESSAGES)
+
 # Use "with get_cursor() as cur:" to write/read to postgres
 @contextmanager
 def get_cursor():
     conn = None
     cur = None
     raw_cursor = None
+    discard_conn = False
 
     conn = extensions.db_pool.getconn() # Finds avaliable slot to init connection
     try:
@@ -55,11 +77,27 @@ def get_cursor():
                 "error": str(exc),
             },
         )
+        discard_conn = _should_discard_connection(conn, exc)
         if conn and not conn.closed:
-            conn.rollback() # Undo any writes if error
+            try:
+                conn.rollback() # Undo any writes if error
+            except (DatabaseError, InterfaceError, OperationalError) as rollback_exc:
+                discard_conn = True
+                logger.warning(
+                    "Failed to roll back database connection",
+                    extra={"error": str(rollback_exc)},
+                )
         raise
     finally:
         if raw_cursor is not None:
-            raw_cursor.close()
+            try:
+                raw_cursor.close()
+            except Exception as close_exc:
+                discard_conn = True
+                logger.warning(
+                    "Failed to close database cursor",
+                    extra={"error": str(close_exc)},
+                )
         if conn is not None:
-            extensions.db_pool.putconn(conn) # Marks slot as free to use again
+            discard_conn = discard_conn or _should_discard_connection(conn)
+            extensions.db_pool.putconn(conn, close=discard_conn) # Marks slot as free to use again

@@ -4,6 +4,7 @@ from contextlib import contextmanager
 from unittest.mock import Mock, patch
 
 import jwt
+from psycopg2 import DatabaseError, OperationalError
 from jwt.exceptions import InvalidTokenError
 from cryptography.hazmat.primitives.asymmetric import ec
 
@@ -15,6 +16,7 @@ from app.routes.users import users_service
 from app.routes.schedules.schedules_service import extract_schedule_identifiers_from_ics
 from app.utils.supabase_admin import get_public_file_object_path
 from app.utils.auth import verify_supabase_jwt
+from app.utils import db as db_utils
 
 
 SAMPLE_ICS = b"""BEGIN:VCALENDAR
@@ -65,6 +67,51 @@ class _FakeCursor:
         if not self._fetchall_values:
             return []
         return self._fetchall_values.pop(0)
+
+
+class _DbFakeCursor:
+    def __init__(self, execute_error=None, close_error=None):
+        self.execute_error = execute_error
+        self.close_error = close_error
+        self.closed = False
+
+    def execute(self, query, params=None):
+        if self.execute_error:
+            raise self.execute_error
+
+    def close(self):
+        self.closed = True
+        if self.close_error:
+            raise self.close_error
+
+
+class _DbFakeConnection:
+    def __init__(self, cursor, closed=False):
+        self._cursor = cursor
+        self.closed = int(closed)
+        self.committed = False
+        self.rolled_back = False
+
+    def cursor(self):
+        return self._cursor
+
+    def commit(self):
+        self.committed = True
+
+    def rollback(self):
+        self.rolled_back = True
+
+
+class _DbFakePool:
+    def __init__(self, conn):
+        self.conn = conn
+        self.putconn_calls = []
+
+    def getconn(self):
+        return self.conn
+
+    def putconn(self, conn, close=False):
+        self.putconn_calls.append((conn, close))
 
 
 class BackendRouteTestCase(unittest.TestCase):
@@ -250,6 +297,65 @@ class BackendRouteTestCase(unittest.TestCase):
 
 
 class BackendServiceTestCase(unittest.TestCase):
+    def test_get_cursor_commits_and_returns_healthy_connection(self):
+        cursor = _DbFakeCursor()
+        conn = _DbFakeConnection(cursor)
+        pool = _DbFakePool(conn)
+
+        with patch.object(db_utils.extensions, "db_pool", pool):
+            with db_utils.get_cursor() as cur:
+                cur.execute("SELECT 1")
+
+        self.assertTrue(conn.committed)
+        self.assertFalse(conn.rolled_back)
+        self.assertTrue(cursor.closed)
+        self.assertEqual(pool.putconn_calls, [(conn, False)])
+
+    def test_get_cursor_rolls_back_and_reuses_connection_for_query_error(self):
+        cursor = _DbFakeCursor(execute_error=DatabaseError("syntax error at or near SELECT"))
+        conn = _DbFakeConnection(cursor)
+        pool = _DbFakePool(conn)
+
+        with patch.object(db_utils.extensions, "db_pool", pool):
+            with self.assertRaises(DatabaseError):
+                with db_utils.get_cursor() as cur:
+                    cur.execute("SELECT")
+
+        self.assertFalse(conn.committed)
+        self.assertTrue(conn.rolled_back)
+        self.assertTrue(cursor.closed)
+        self.assertEqual(pool.putconn_calls, [(conn, False)])
+
+    def test_get_cursor_discards_connection_closed_by_server(self):
+        cursor = _DbFakeCursor(
+            execute_error=OperationalError("server closed the connection unexpectedly")
+        )
+        conn = _DbFakeConnection(cursor)
+        pool = _DbFakePool(conn)
+
+        with patch.object(db_utils.extensions, "db_pool", pool):
+            with self.assertRaises(OperationalError):
+                with db_utils.get_cursor() as cur:
+                    cur.execute("SELECT 1")
+
+        self.assertTrue(conn.rolled_back)
+        self.assertTrue(cursor.closed)
+        self.assertEqual(pool.putconn_calls, [(conn, True)])
+
+    def test_get_cursor_discards_already_closed_connection_without_rollback(self):
+        cursor = _DbFakeCursor(execute_error=DatabaseError("connection already closed"))
+        conn = _DbFakeConnection(cursor, closed=True)
+        pool = _DbFakePool(conn)
+
+        with patch.object(db_utils.extensions, "db_pool", pool):
+            with self.assertRaises(DatabaseError):
+                with db_utils.get_cursor() as cur:
+                    cur.execute("SELECT 1")
+
+        self.assertFalse(conn.rolled_back)
+        self.assertTrue(cursor.closed)
+        self.assertEqual(pool.putconn_calls, [(conn, True)])
+
     def test_public_file_object_path_is_extracted_from_supabase_url(self):
         object_path = get_public_file_object_path(
             "http://127.0.0.1:54321/storage/v1/object/public/images/avatars/user-1/photo.png"
