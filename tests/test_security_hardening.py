@@ -174,6 +174,30 @@ class BackendRouteTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 404)
         self.assertEqual(response.get_json()["error"], "Group not found")
 
+    def test_join_group_uses_post_with_json_body(self):
+        join_result = {
+            "group_id": "group-1",
+            "already_member": False,
+        }
+        with patch("app.routes.groups.groups_controller.join_group", return_value=join_result) as join_mock:
+            response = self.client.post(
+                "/api/groups/join",
+                headers=self._auth_header(),
+                json={"join_code": "ABC123"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["status"], "Group joined successfully")
+        join_mock.assert_called_once_with("user-1", "ABC123")
+
+    def test_join_group_rejects_get_requests(self):
+        response = self.client.get(
+            "/api/groups/join?join_code=ABC123",
+            headers=self._auth_header(),
+        )
+
+        self.assertEqual(response.status_code, 405)
+
     def test_matching_classmates_returns_404_for_non_member(self):
         with patch("app.routes.schedules.schedules_controller.get_matching_classmates", side_effect=PermissionError("Group not found")):
             response = self.client.get(

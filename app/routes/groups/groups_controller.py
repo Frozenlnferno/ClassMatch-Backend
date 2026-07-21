@@ -125,12 +125,13 @@ def create_group_route():
     return jsonify({"status": "Group created successfully"}), 201
 
 
-@bp.route("/join", methods=["GET"])
+@bp.route("/join", methods=["POST"])
 @require_auth
 def join_group_route():
     # Join a group using a join code
     user_id = g.user["sub"]
-    join_code = request.args.get("join_code")
+    data = request.get_json(silent=True) or {}
+    join_code = data["join_code"] if "join_code" in data else None
 
     try:
         result = join_group(user_id, join_code)
@@ -142,6 +143,11 @@ def join_group_route():
         "group_id": result["group_id"],
         "already_member": result["already_member"],
     }), 200
+
+
+@bp.route("/join", methods=["GET"])
+def reject_get_join_group_route():
+    return jsonify({"error": "Method not allowed. Use POST to join a group."}), 405, {"Allow": "POST"}
 
 
 @bp.route("/leave", methods=["POST"])
